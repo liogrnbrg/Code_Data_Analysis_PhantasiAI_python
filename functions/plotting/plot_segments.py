@@ -7,7 +7,7 @@ from utils.style import pretty_axes, save_pretty_fig, get_robust_ylims
 from utils.config import get_config
 
 config = get_config()
-plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
+#plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
 
 def plot_emg_segment_by_participant(
     segment_df,

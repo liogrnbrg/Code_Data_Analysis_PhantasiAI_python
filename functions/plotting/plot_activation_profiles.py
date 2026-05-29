@@ -10,7 +10,7 @@ from utils.config import get_config
 config = get_config()
 
 # Take the font family setting from the config to ensure consistency across all plots.
-plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
+#plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
 
 def plot_activation_profiles_grid_by_participant_and_isi(
     signal_data,

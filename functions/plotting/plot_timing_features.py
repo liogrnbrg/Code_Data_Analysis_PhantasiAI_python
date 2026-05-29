@@ -9,7 +9,7 @@ from utils.paths import make_safe_filename
 from utils.config import get_config
 
 config = get_config()
-plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
+#plt.rcParams.update({'font.family': config["plot"]["font"]["family"]})
 
 def _get_participants(timing_data):
     return timing_data["participant_id"].dropna().unique()

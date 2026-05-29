@@ -15,7 +15,7 @@ def get_config():
             "Mara": np.array([0.47, 0.67, 0.19]),
         },
         "font": {
-            "family": "Arial", # Options: 'serif', 'sans-serif', 'cursive', 'fantasy', 'monospace', 'normal' ...
+            "family": "DejaVu Sans", # Options: 'serif', 'sans-serif', 'cursive', 'fantasy', 'monospace', 'normal' ...
             "size": 12,
         },
     }

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Outputs / generated files
+outputs/
+Outputs/
+plots/
+Plots/
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# Data should not be pushed
+data/
+Data/
+
+# Large/raw files
+*.csv
+*.xlsx
+*.mat
+*.h5
+*.hdf5
+
+# Keep examples if needed
+!examples/
+!examples/**/*.csv

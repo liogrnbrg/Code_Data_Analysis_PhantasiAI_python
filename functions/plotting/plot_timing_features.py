@@ -481,6 +481,310 @@ def plot_delta_peak_amplitude_vs_delta_isi_by_participant(
         plots_dir,
     )
 
+def plot_delta_peak_amplitude_by_delta_isi_sign_by_participant(
+    timing_data,
+    plots_dir,
+    subject_colors,
+    zero_tolerance=1e-9,
+):
+    """
+    Boxplots of relative change in peak amplitude grouped by the sign of delta ISI.
+
+    Groups:
+        Negative  -> current ISI - previous ISI < 0
+        No change -> current ISI - previous ISI == 0
+        Positive  -> current ISI - previous ISI > 0
+
+    y = 100 * (current peak_amp - previous peak_amp) / previous peak_amp
+    """
+
+    participants = _get_participants(timing_data)
+
+    all_delta_amp = []
+    delta_tables = {}
+
+    for participant_id in participants:
+        dfp = timing_data[
+            timing_data["participant_id"] == participant_id
+        ].sort_values("trial_num").copy()
+
+        if len(dfp) < 2:
+            continue
+
+        isi_col = "isi_bin" if "isi_bin" in dfp.columns else "isi"
+
+        isi = dfp[isi_col].to_numpy(dtype=float)
+        peak_amp = dfp["peak_amp"].to_numpy(dtype=float)
+
+        delta_isi = isi[1:] - isi[:-1]
+        delta_amp_pct = 100 * (peak_amp[1:] - peak_amp[:-1]) / peak_amp[:-1]
+
+        valid = (
+            np.isfinite(delta_isi)
+            & np.isfinite(delta_amp_pct)
+            & np.isfinite(peak_amp[:-1])
+            & (peak_amp[:-1] != 0)
+        )
+
+        delta_isi = delta_isi[valid]
+        delta_amp_pct = delta_amp_pct[valid]
+
+        negative = delta_amp_pct[delta_isi < -zero_tolerance]
+        no_change = delta_amp_pct[np.abs(delta_isi) <= zero_tolerance]
+        positive = delta_amp_pct[delta_isi > zero_tolerance]
+
+        delta_tables[participant_id] = {
+            "Negative": negative,
+            "No change": no_change,
+            "Positive": positive,
+        }
+
+        all_delta_amp.extend(delta_amp_pct)
+
+    ylims = get_robust_ylims(all_delta_amp) if len(all_delta_amp) > 0 else (-1, 1)
+
+    fig, axes = plt.subplots(
+        nrows=len(participants),
+        ncols=1,
+        figsize=(10, max(4, 2.8 * len(participants))),
+        sharex=True,
+        sharey=True,
+    )
+
+    if len(participants) == 1:
+        axes = [axes]
+
+    labels = ["Negative", "No change", "Positive"]
+    positions = [1, 2, 3]
+
+    for ax, participant_id in zip(axes, participants):
+
+        color = get_subject_color(participant_id, subject_colors)
+
+        if participant_id not in delta_tables:
+            ax.text(
+                0.5,
+                0.5,
+                "Not enough trials",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_title(str(participant_id))
+            pretty_axes(ax)
+            continue
+
+        grouped = delta_tables[participant_id]
+
+        for pos, label in zip(positions, labels):
+            y = grouped[label]
+            y = y[np.isfinite(y)]
+
+            if len(y) > 0:
+                ax.boxplot(
+                    [y],
+                    positions=[pos],
+                    widths=0.55,
+                    showfliers=False,
+                    patch_artist=False,
+                    boxprops=dict(color="black", linewidth=1.4),
+                    medianprops=dict(color="black", linewidth=1.7),
+                    whiskerprops=dict(color="black", linewidth=1.2),
+                    capprops=dict(color="black", linewidth=1.2),
+                )
+
+                x = pos + (np.random.rand(len(y)) - 0.5) * 0.20
+
+                ax.scatter(
+                    x,
+                    y,
+                    s=24,
+                    color=color,
+                    edgecolor="black",
+                    linewidth=0.25,
+                    alpha=0.65,
+                )
+            else:
+                ax.text(
+                    pos,
+                    np.mean(ylims),
+                    "n=0",
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    alpha=0.7,
+                )
+
+        ax.axhline(0, color="black", linestyle="--", linewidth=1)
+
+        ax.set_xlim(0.5, 3.5)
+        ax.set_ylim(*ylims)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels)
+        ax.set_title(str(participant_id))
+
+        pretty_axes(ax)
+
+    fig.supxlabel("Direction of ISI change")
+    fig.supylabel("Relative change in peak amplitude (%)")
+    fig.suptitle(
+        "Peak amplitude change grouped by the direction of ISI change",
+        y=1.02,
+    )
+
+    save_pretty_fig(
+        fig,
+        "delta_peak_amplitude_by_delta_isi_sign_by_participant.png",
+        plots_dir,
+    )
+
+def plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant(
+    timing_data,
+    plots_dir,
+    subject_colors,
+):
+    """
+    Scatter + regression.
+
+    x = current ISI - previous ISI
+    y = 100 * (current peak_amp - previous peak_amp) / previous peak_amp
+    """
+
+    participants = _get_participants(timing_data)
+
+    all_x = []
+    all_y = []
+    delta_tables = {}
+
+    for participant_id in participants:
+        dfp = timing_data[
+            timing_data["participant_id"] == participant_id
+        ].sort_values("trial_num").copy()
+
+        if len(dfp) < 2:
+            continue
+
+        isi_col = "isi_bin" if "isi_bin" in dfp.columns else "isi"
+
+        isi = dfp[isi_col].to_numpy(dtype=float)
+        peak_amp = dfp["peak_amp"].to_numpy(dtype=float)
+
+        delta_isi = isi[1:] - isi[:-1]
+        delta_amp_pct = 100 * (peak_amp[1:] - peak_amp[:-1]) / peak_amp[:-1]
+
+        valid = (
+            np.isfinite(delta_isi)
+            & np.isfinite(delta_amp_pct)
+            & np.isfinite(peak_amp[:-1])
+            & (peak_amp[:-1] != 0)
+        )
+
+        delta_isi = delta_isi[valid]
+        delta_amp_pct = delta_amp_pct[valid]
+
+        delta_tables[participant_id] = {
+            "delta_isi": delta_isi,
+            "delta_amp_pct": delta_amp_pct,
+        }
+
+        all_x.extend(delta_isi)
+        all_y.extend(delta_amp_pct)
+
+    xlims = get_robust_ylims(all_x)
+    ylims = get_robust_ylims(all_y)
+
+    fig, axes = plt.subplots(
+        nrows=len(participants),
+        ncols=1,
+        figsize=(10, max(4, 2.8 * len(participants))),
+        sharex=True,
+        sharey=True,
+    )
+
+    if len(participants) == 1:
+        axes = [axes]
+
+    for ax, participant_id in zip(axes, participants):
+
+        color = get_subject_color(participant_id, subject_colors)
+
+        if participant_id not in delta_tables:
+            ax.text(
+                0.5,
+                0.5,
+                "Not enough trials",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_title(str(participant_id))
+            pretty_axes(ax)
+            continue
+
+        x = delta_tables[participant_id]["delta_isi"]
+        y = delta_tables[participant_id]["delta_amp_pct"]
+
+        if len(x) < 3:
+            ax.text(
+                0.5,
+                0.5,
+                "Not enough valid trials",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+            ax.set_title(str(participant_id))
+            pretty_axes(ax)
+            continue
+
+        ax.scatter(
+            x,
+            y,
+            s=30,
+            color=color,
+            edgecolor="black",
+            linewidth=0.3,
+            alpha=0.70,
+        )
+
+        res = linregress(x, y)
+
+        x_fit = np.linspace(np.nanmin(x), np.nanmax(x), 100)
+        y_fit = res.intercept + res.slope * x_fit
+
+        ax.plot(
+            x_fit,
+            y_fit,
+            color=color,
+            linewidth=2.5,
+        )
+
+        ax.axhline(0, color="black", linestyle="--", linewidth=1)
+        ax.axvline(0, color="black", linestyle="--", linewidth=1)
+
+        ax.set_xlim(*xlims)
+        ax.set_ylim(*ylims)
+
+        ax.set_title(
+            f"{participant_id} | slope = {res.slope:.4f}, "
+            f"r = {res.rvalue:.3f}, p = {res.pvalue:.3g}"
+        )
+
+        pretty_axes(ax)
+
+    fig.supxlabel("Current ISI - previous ISI (s)")
+    fig.supylabel("Relative change in peak amplitude (%)")
+    fig.suptitle(
+        "Peak amplitude change vs previous ISI change",
+        y=1.02,
+    )
+
+    save_pretty_fig(
+        fig,
+        "delta_peak_amplitude_vs_delta_isi_regression_by_participant.png",
+        plots_dir,
+    )
+
 def plot_peak_amplitude_vs_recent_isi_context_by_participant(
     timing_data,
     plots_dir,

@@ -17,6 +17,8 @@ from plotting.plot_timing_features import (
     plot_delta_peak_amplitude_vs_delta_isi_by_participant,
     plot_peak_amplitude_vs_recent_isi_context_by_participant,
     plot_current_peak_amplitude_vs_delta_isi_by_participant,
+    plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant,
+    plot_delta_peak_amplitude_by_delta_isi_sign_by_participant,
 )
 
 C = get_config()
@@ -75,6 +77,20 @@ def main():
     plot_event_peak_delay_boxplot_by_isi(
         timing_data=timing_data,
         plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+    )
+
+    print("Plotting delta peak amplitude vs delta ISI regression...")
+    plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant(
+    timing_data=timing_data,
+    plots_dir=PLOTS_DIR,
+    subject_colors=subject_colors,
+    )
+
+    print("Plotting delta peak amplitude vs delta ISI sign...")
+    plot_delta_peak_amplitude_by_delta_isi_sign_by_participant(
+        timing_data=timing_data,
+        plots_dir=PLOTS_TIMING_DIR,
         subject_colors=subject_colors,
     )
 

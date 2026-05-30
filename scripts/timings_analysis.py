@@ -90,7 +90,7 @@ def main():
     print("Plotting delta peak amplitude vs delta ISI sign...")
     plot_delta_peak_amplitude_by_delta_isi_sign_by_participant(
         timing_data=timing_data,
-        plots_dir=PLOTS_TIMING_DIR,
+        plots_dir=PLOTS_DIR,
         subject_colors=subject_colors,
     )
 

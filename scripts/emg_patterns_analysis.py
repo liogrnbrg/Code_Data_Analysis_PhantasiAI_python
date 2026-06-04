@@ -46,7 +46,7 @@ def main():
     C = get_config()
     subject_colors = C["plot"]["subject_colors"]
 
-    fraction_to_plot = 1 / 20
+    fraction_to_plot = 1 / 10
     segment_position = "start"  # "start", "middle", or "end"
 
     print("Loading data...")

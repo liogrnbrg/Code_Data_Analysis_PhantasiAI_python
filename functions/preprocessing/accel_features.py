@@ -2,86 +2,103 @@ import numpy as np
 import pandas as pd
 
 
-def add_accel_norm(accel_data):
+def cumulative_trapezoid_np(y, t):
     """
-    Add acceleration norm to the dataframe.
-
-    accel_norm = sqrt(accel_x^2 + accel_y^2 + accel_z^2)
+    Simple cumulative trapezoidal integration without scipy.
     """
+    y = np.asarray(y, dtype=float)
+    t = np.asarray(t, dtype=float)
 
-    accel_data = accel_data.copy()
-
-    accel_data["accel_norm"] = np.sqrt(
-        accel_data["accel_x"] ** 2
-        + accel_data["accel_y"] ** 2
-        + accel_data["accel_z"] ** 2
-    )
-
-    return accel_data
+    out = np.zeros_like(y)
+    out[1:] = np.cumsum(0.5 * (y[1:] + y[:-1]) * np.diff(t))
+    return out
 
 
-def add_accel_tilt_angles(accel_data):
-    """
-    Add simple accelerometer-based tilt angles.
-
-    These are proxy angles based on the accelerometer vector.
-    They should be interpreted as sensor/segment inclination proxies,
-    not as true joint angles.
-    """
-
-    accel_data = accel_data.copy()
-
-    ax = accel_data["accel_x"].to_numpy(dtype=float)
-    ay = accel_data["accel_y"].to_numpy(dtype=float)
-    az = accel_data["accel_z"].to_numpy(dtype=float)
-
-    accel_data["tilt_x_deg"] = np.degrees(np.arctan2(ax, np.sqrt(ay**2 + az**2)))
-    accel_data["tilt_y_deg"] = np.degrees(np.arctan2(ay, np.sqrt(ax**2 + az**2)))
-    accel_data["tilt_z_deg"] = np.degrees(np.arctan2(np.sqrt(ax**2 + ay**2), az))
-
-    return accel_data
-
-
-def extract_accel_behavior_metrics(
-    accel_data,
-    timing_data,
-    signal_var="accel_norm",
-    baseline_window_s=(-0.5, 0),
-    response_window_s=(0, None),
+def integrate_accel_one_trial(
+    t,
+    accel,
+    baseline_value=None,
+    force_zero_velocity_end=True,
+    detrend_position=True,
 ):
     """
-    Extract behavioral movement metrics from accelerometer data for each trial.
+    Integrate acceleration within one trial.
 
-    For each trial:
-        start = event time
-        end   = next event time
+    accel -> velocity proxy -> position proxy
 
-    Metrics:
-        baseline_mean
-        peak_value
-        peak_relative_to_baseline
-        peak_latency_s
-        auc_relative_to_baseline
-        signal_range
+    These are exploratory proxies, not validated physical velocity/position.
     """
 
-    rows = []
+    t = np.asarray(t, dtype=float)
+    accel = np.asarray(accel, dtype=float)
 
-    for participant_id in timing_data["participant_id"].dropna().unique():
+    valid = np.isfinite(t) & np.isfinite(accel)
+    t = t[valid]
+    accel = accel[valid]
 
-        accel_p = accel_data[
-            accel_data["participant_id"] == participant_id
-        ].sort_values("timestamp").reset_index(drop=True)
+    if len(t) < 3:
+        return None, None, None
 
+    t = t - t[0]
+
+    if baseline_value is None:
+        baseline_value = np.nanmedian(accel)
+
+    accel_centered = accel - baseline_value
+
+    velocity = cumulative_trapezoid_np(accel_centered, t)
+
+    if force_zero_velocity_end:
+        velocity_drift = np.linspace(velocity[0], velocity[-1], len(velocity))
+        velocity = velocity - velocity_drift
+
+    position = cumulative_trapezoid_np(velocity, t)
+
+    if detrend_position:
+        position_drift = np.linspace(position[0], position[-1], len(position))
+        position = position - position_drift
+
+    return t, velocity, position
+
+
+def add_trialwise_velocity_position_proxies(
+    data,
+    timing_data,
+    accel_cols=("accel_x", "accel_y", "accel_z"),
+    baseline_window_s=(-0.5, 0),
+    force_zero_velocity_end=True,
+    detrend_position=True,
+):
+    """
+    Add trial-wise velocity and position proxy columns.
+
+    For each trial:
+        event -> next event
+        baseline = mean acceleration before event
+        acceleration is integrated only inside that trial window
+    """
+
+    data = data.sort_values("timestamp").copy()
+
+    for accel_col in accel_cols:
+        axis = accel_col.replace("accel_", "")
+        data[f"velocity_{axis}"] = np.nan
+        data[f"position_{axis}"] = np.nan
+
+    participants = data["participant_id"].dropna().unique()
+
+    for participant_id in participants:
+
+        data_p = data[data["participant_id"] == participant_id].sort_values("timestamp")
         timing_p = timing_data[
             timing_data["participant_id"] == participant_id
         ].sort_values("event").reset_index(drop=True)
 
-        if len(accel_p) == 0 or len(timing_p) < 2:
+        if len(timing_p) < 2:
             continue
 
-        timestamps = accel_p["timestamp"].to_numpy(dtype=float)
-        signal = accel_p[signal_var].to_numpy(dtype=float)
+        timestamps = data_p["timestamp"].to_numpy(dtype=float)
+        data_p_index = data_p.index.to_numpy()
 
         for i in range(len(timing_p) - 1):
 
@@ -94,41 +111,105 @@ def extract_accel_behavior_metrics(
             if event_end <= event_start:
                 continue
 
-            baseline_start = event_start + baseline_window_s[0]
-            baseline_end = event_start + baseline_window_s[1]
+            trial_mask = (timestamps >= event_start) & (timestamps < event_end)
 
-            response_start = event_start + response_window_s[0]
-
-            if response_window_s[1] is None:
-                response_end = event_end
-            else:
-                response_end = event_start + response_window_s[1]
-
-            baseline_idx = (timestamps >= baseline_start) & (timestamps < baseline_end)
-            response_idx = (timestamps >= response_start) & (timestamps < response_end)
-
-            baseline_signal = signal[baseline_idx]
-            response_signal = signal[response_idx]
-            response_time = timestamps[response_idx] - event_start
-
-            if len(response_signal) < 3:
+            if trial_mask.sum() < 3:
                 continue
 
-            baseline_mean = np.nanmean(baseline_signal) if len(baseline_signal) > 0 else np.nan
+            trial_indices = data_p_index[trial_mask]
+            t_trial = timestamps[trial_mask]
 
-            peak_idx = np.nanargmax(response_signal)
-            peak_value = response_signal[peak_idx]
-            peak_latency_s = response_time[peak_idx]
+            baseline_start = event_start + baseline_window_s[0]
+            baseline_end = event_start + baseline_window_s[1]
+            baseline_mask = (timestamps >= baseline_start) & (timestamps < baseline_end)
 
-            if np.isfinite(baseline_mean):
-                response_centered = response_signal - baseline_mean
-                peak_relative = peak_value - baseline_mean
-                auc_relative = np.trapezoid(response_centered, response_time)
-            else:
-                peak_relative = np.nan
-                auc_relative = np.nan
+            for accel_col in accel_cols:
 
-            signal_range = np.nanmax(response_signal) - np.nanmin(response_signal)
+                axis = accel_col.replace("accel_", "")
+                accel_all = data_p[accel_col].to_numpy(dtype=float)
+
+                if baseline_mask.sum() >= 3:
+                    baseline_value = np.nanmean(accel_all[baseline_mask])
+                else:
+                    baseline_value = np.nanmedian(accel_all[trial_mask])
+
+                accel_trial = accel_all[trial_mask]
+
+                _, velocity, position = integrate_accel_one_trial(
+                    t=t_trial,
+                    accel=accel_trial,
+                    baseline_value=baseline_value,
+                    force_zero_velocity_end=force_zero_velocity_end,
+                    detrend_position=detrend_position,
+                )
+
+                if velocity is None:
+                    continue
+
+                data.loc[trial_indices, f"velocity_{axis}"] = velocity
+                data.loc[trial_indices, f"position_{axis}"] = position
+
+    data["velocity_norm"] = np.sqrt(
+        data["velocity_x"] ** 2 + data["velocity_y"] ** 2 + data["velocity_z"] ** 2
+    )
+
+    data["position_norm"] = np.sqrt(
+        data["position_x"] ** 2 + data["position_y"] ** 2 + data["position_z"] ** 2
+    )
+
+    return data
+
+def extract_trial_amplitude_metrics(
+    signal_data,
+    timing_data,
+    signal_vars=(
+        "accel_x", "accel_y", "accel_z",
+        "velocity_x", "velocity_y", "velocity_z",
+        "position_x", "position_y", "position_z",
+    ),
+):
+    """
+    Extract per-trial movement amplitude metrics.
+
+    For each trial:
+        amplitude = max(signal) - min(signal)
+
+    Trial window:
+        current event -> next event
+    """
+
+    rows = []
+
+    for participant_id in timing_data["participant_id"].dropna().unique():
+
+        signal_p = signal_data[
+            signal_data["participant_id"] == participant_id
+        ].sort_values("timestamp").reset_index(drop=True)
+
+        timing_p = timing_data[
+            timing_data["participant_id"] == participant_id
+        ].sort_values("event").reset_index(drop=True)
+
+        if len(signal_p) == 0 or len(timing_p) < 2:
+            continue
+
+        timestamps = signal_p["timestamp"].to_numpy(dtype=float)
+
+        for i in range(len(timing_p) - 1):
+
+            event_start = timing_p.loc[i, "event"]
+            event_end = timing_p.loc[i + 1, "event"]
+
+            if not np.isfinite(event_start) or not np.isfinite(event_end):
+                continue
+
+            if event_end <= event_start:
+                continue
+
+            trial_mask = (timestamps >= event_start) & (timestamps < event_end)
+
+            if trial_mask.sum() < 3:
+                continue
 
             row = {
                 "participant_id": participant_id,
@@ -136,320 +217,51 @@ def extract_accel_behavior_metrics(
                 "isi": timing_p.loc[i, "isi"],
                 "isi_bin": timing_p.loc[i, "isi_bin"] if "isi_bin" in timing_p.columns else np.nan,
                 "event": event_start,
-                "signal_var": signal_var,
-                "baseline_mean": baseline_mean,
-                "accel_peak": peak_value,
-                "accel_peak_relative": peak_relative,
-                "accel_peak_latency_s": peak_latency_s,
-                "accel_auc_relative": auc_relative,
-                "accel_range": signal_range,
+                "next_event": event_end,
+                "trial_duration_s": event_end - event_start,
             }
+
+            for signal_var in signal_vars:
+
+                if signal_var not in signal_p.columns:
+                    continue
+
+                y = signal_p.loc[trial_mask, signal_var].to_numpy(dtype=float)
+                y = y[np.isfinite(y)]
+
+                if len(y) < 3:
+                    row[f"{signal_var}_amp"] = np.nan
+                    row[f"{signal_var}_abs_peak"] = np.nan
+                    continue
+
+                row[f"{signal_var}_amp"] = np.nanmax(y) - np.nanmin(y)
+                row[f"{signal_var}_abs_peak"] = np.nanmax(np.abs(y))
+
+            # 3D amplitude across axes
+            for prefix in ["accel", "velocity", "position"]:
+
+                x_col = f"{prefix}_x_amp"
+                y_col = f"{prefix}_y_amp"
+                z_col = f"{prefix}_z_amp"
+
+                if x_col in row and y_col in row and z_col in row:
+                    row[f"{prefix}_3d_amp"] = np.sqrt(
+                        row[x_col] ** 2
+                        + row[y_col] ** 2
+                        + row[z_col] ** 2
+                    )
+
+                    axis_values = {
+                        "x": row[x_col],
+                        "y": row[y_col],
+                        "z": row[z_col],
+                    }
+
+                    dominant_axis = max(axis_values, key=axis_values.get)
+
+                    row[f"{prefix}_dominant_axis"] = dominant_axis
+                    row[f"{prefix}_dominant_amp"] = axis_values[dominant_axis]
 
             rows.append(row)
-
-    return pd.DataFrame(rows)
-
-
-def extract_angle_rom_metrics(
-    accel_data,
-    timing_data,
-    angle_vars=("tilt_x_deg", "tilt_y_deg", "tilt_z_deg"),
-):
-    """
-    Extract ROM proxy metrics from accelerometer-derived tilt angles.
-
-    ROM proxy = max(angle) - min(angle) within each trial window.
-
-    Important:
-    This is not a true joint ROM unless sensor placement/orientation
-    and segment calibration justify it.
-    """
-
-    all_metrics = []
-
-    for angle_var in angle_vars:
-
-        metrics = extract_accel_behavior_metrics(
-            accel_data=accel_data,
-            timing_data=timing_data,
-            signal_var=angle_var,
-            baseline_window_s=(-0.5, 0),
-            response_window_s=(0, None),
-        )
-
-        if metrics.empty:
-            continue
-
-        metrics = metrics.rename(
-            columns={
-                "accel_peak": f"{angle_var}_peak",
-                "accel_peak_relative": f"{angle_var}_peak_relative",
-                "accel_peak_latency_s": f"{angle_var}_peak_latency_s",
-                "accel_auc_relative": f"{angle_var}_auc_relative",
-                "accel_range": f"{angle_var}_rom_proxy",
-            }
-        )
-
-        keep_cols = [
-            "participant_id",
-            "trial_num",
-            "isi",
-            "isi_bin",
-            "event",
-            f"{angle_var}_peak",
-            f"{angle_var}_peak_relative",
-            f"{angle_var}_peak_latency_s",
-            f"{angle_var}_auc_relative",
-            f"{angle_var}_rom_proxy",
-        ]
-
-        all_metrics.append(metrics[keep_cols])
-
-    if len(all_metrics) == 0:
-        return pd.DataFrame()
-
-    rom_metrics = all_metrics[0]
-
-    for metrics in all_metrics[1:]:
-        rom_metrics = rom_metrics.merge(
-            metrics,
-            on=["participant_id", "trial_num", "isi", "isi_bin", "event"],
-            how="outer",
-        )
-
-    return rom_metrics
-
-def extract_baseline_corrected_movement_metrics(
-    accel_data,
-    timing_data,
-    baseline_window_s=(-0.5, 0),
-    response_window_s=(0, None),
-):
-    """
-    Extract behavioral movement metrics from 3D acceleration.
-
-    For each trial:
-        baseline vector = mean accel_x/y/z before event
-        movement magnitude = norm(accel(t) - baseline_vector)
-
-    This gives a baseline-corrected movement amplitude proxy.
-    """
-
-    rows = []
-
-    for participant_id in timing_data["participant_id"].dropna().unique():
-
-        accel_p = accel_data[
-            accel_data["participant_id"] == participant_id
-        ].sort_values("timestamp").reset_index(drop=True)
-
-        timing_p = timing_data[
-            timing_data["participant_id"] == participant_id
-        ].sort_values("event").reset_index(drop=True)
-
-        if len(accel_p) == 0 or len(timing_p) < 2:
-            continue
-
-        timestamps = accel_p["timestamp"].to_numpy(dtype=float)
-
-        ax = accel_p["accel_x"].to_numpy(dtype=float)
-        ay = accel_p["accel_y"].to_numpy(dtype=float)
-        az = accel_p["accel_z"].to_numpy(dtype=float)
-
-        for i in range(len(timing_p) - 1):
-
-            event_start = timing_p.loc[i, "event"]
-            event_end = timing_p.loc[i + 1, "event"]
-
-            if not np.isfinite(event_start) or not np.isfinite(event_end):
-                continue
-
-            if event_end <= event_start:
-                continue
-
-            baseline_start = event_start + baseline_window_s[0]
-            baseline_end = event_start + baseline_window_s[1]
-
-            response_start = event_start + response_window_s[0]
-
-            if response_window_s[1] is None:
-                response_end = event_end
-            else:
-                response_end = event_start + response_window_s[1]
-
-            baseline_idx = (timestamps >= baseline_start) & (timestamps < baseline_end)
-            response_idx = (timestamps >= response_start) & (timestamps < response_end)
-
-            if baseline_idx.sum() < 3 or response_idx.sum() < 3:
-                continue
-
-            baseline_x = np.nanmean(ax[baseline_idx])
-            baseline_y = np.nanmean(ay[baseline_idx])
-            baseline_z = np.nanmean(az[baseline_idx])
-
-            response_time = timestamps[response_idx] - event_start
-
-            dx = ax[response_idx] - baseline_x
-            dy = ay[response_idx] - baseline_y
-            dz = az[response_idx] - baseline_z
-
-            movement_mag = np.sqrt(dx**2 + dy**2 + dz**2)
-
-            if len(movement_mag) < 3 or not np.any(np.isfinite(movement_mag)):
-                continue
-
-            peak_idx = np.nanargmax(movement_mag)
-
-            movement_peak = movement_mag[peak_idx]
-            movement_peak_latency_s = response_time[peak_idx]
-            movement_auc = np.trapezoid(movement_mag, response_time)
-            movement_mean = np.nanmean(movement_mag)
-            movement_sd = np.nanstd(movement_mag)
-
-            rows.append({
-                "participant_id": participant_id,
-                "trial_num": timing_p.loc[i, "trial_num"] if "trial_num" in timing_p.columns else i + 1,
-                "isi": timing_p.loc[i, "isi"],
-                "isi_bin": timing_p.loc[i, "isi_bin"] if "isi_bin" in timing_p.columns else np.nan,
-                "event": event_start,
-
-                "movement_peak": movement_peak,
-                "movement_peak_latency_s": movement_peak_latency_s,
-                "movement_auc": movement_auc,
-                "movement_mean": movement_mean,
-                "movement_sd": movement_sd,
-
-                "baseline_accel_x": baseline_x,
-                "baseline_accel_y": baseline_y,
-                "baseline_accel_z": baseline_z,
-            })
-
-    return pd.DataFrame(rows)
-
-def extract_integrated_accel_displacement_metrics(
-    accel_data,
-    timing_data,
-    accel_axis="accel_z",
-    baseline_window_s=(-0.5, 0),
-    response_window_s=(0, None),
-    detrend_position=True,
-):
-    """
-    Exploratory displacement proxy by double integration of acceleration.
-
-    For each trial:
-        1. subtract pre-event acceleration baseline
-        2. integrate acceleration -> velocity
-        3. integrate velocity -> displacement
-        4. extract displacement range / peak
-
-    Important:
-        This is NOT true position unless gravity, orientation and drift are corrected.
-        It should be interpreted as an exploratory displacement proxy.
-    """
-
-    rows = []
-
-    for participant_id in timing_data["participant_id"].dropna().unique():
-
-        accel_p = accel_data[
-            accel_data["participant_id"] == participant_id
-        ].sort_values("timestamp").reset_index(drop=True)
-
-        timing_p = timing_data[
-            timing_data["participant_id"] == participant_id
-        ].sort_values("event").reset_index(drop=True)
-
-        if len(accel_p) == 0 or len(timing_p) < 2:
-            continue
-
-        timestamps = accel_p["timestamp"].to_numpy(dtype=float)
-        accel = accel_p[accel_axis].to_numpy(dtype=float)
-
-        for i in range(len(timing_p) - 1):
-
-            event_start = timing_p.loc[i, "event"]
-            event_end = timing_p.loc[i + 1, "event"]
-
-            if not np.isfinite(event_start) or not np.isfinite(event_end):
-                continue
-
-            if event_end <= event_start:
-                continue
-
-            baseline_start = event_start + baseline_window_s[0]
-            baseline_end = event_start + baseline_window_s[1]
-
-            response_start = event_start + response_window_s[0]
-
-            if response_window_s[1] is None:
-                response_end = event_end
-            else:
-                response_end = event_start + response_window_s[1]
-
-            baseline_idx = (timestamps >= baseline_start) & (timestamps < baseline_end)
-            response_idx = (timestamps >= response_start) & (timestamps < response_end)
-
-            if baseline_idx.sum() < 3 or response_idx.sum() < 3:
-                continue
-
-            t = timestamps[response_idx] - event_start
-            a = accel[response_idx]
-
-            baseline_accel = np.nanmean(accel[baseline_idx])
-            a = a - baseline_accel
-
-            valid = np.isfinite(t) & np.isfinite(a)
-            t = t[valid]
-            a = a[valid]
-
-            if len(t) < 3:
-                continue
-
-            # Ensure time starts at 0
-            t = t - t[0]
-
-            # Integrate acceleration -> velocity
-            velocity = np.zeros_like(a)
-            velocity[1:] = np.cumsum(
-                0.5 * (a[1:] + a[:-1]) * np.diff(t)
-            )
-
-            # Remove simple linear drift in velocity:
-            # assume velocity should be ~0 at the end of the short trial window
-            velocity_drift = np.linspace(velocity[0], velocity[-1], len(velocity))
-            velocity_corrected = velocity - velocity_drift
-
-            # Integrate velocity -> displacement
-            displacement = np.zeros_like(velocity_corrected)
-            displacement[1:] = np.cumsum(
-                0.5 * (velocity_corrected[1:] + velocity_corrected[:-1]) * np.diff(t)
-            )
-
-            if detrend_position:
-                position_drift = np.linspace(displacement[0], displacement[-1], len(displacement))
-                displacement = displacement - position_drift
-
-            disp_range = np.nanmax(displacement) - np.nanmin(displacement)
-            disp_peak_abs = np.nanmax(np.abs(displacement))
-            disp_final = displacement[-1]
-
-            peak_idx = np.nanargmax(np.abs(displacement))
-            disp_peak_latency_s = t[peak_idx]
-
-            rows.append({
-                "participant_id": participant_id,
-                "trial_num": timing_p.loc[i, "trial_num"] if "trial_num" in timing_p.columns else i + 1,
-                "isi": timing_p.loc[i, "isi"],
-                "isi_bin": timing_p.loc[i, "isi_bin"] if "isi_bin" in timing_p.columns else np.nan,
-                "event": event_start,
-                "accel_axis": accel_axis,
-
-                "baseline_accel": baseline_accel,
-                "disp_range_proxy": disp_range,
-                "disp_peak_abs_proxy": disp_peak_abs,
-                "disp_final_proxy": disp_final,
-                "disp_peak_latency_s": disp_peak_latency_s,
-            })
 
     return pd.DataFrame(rows)

@@ -145,12 +145,6 @@ def plot_accel_segment_by_participant(
     filename = f"{make_safe_filename(participant_id)}_{make_safe_filename(fig_suffix)}.png"
     save_pretty_fig(fig, filename, plots_dir)
 
-import matplotlib.pyplot as plt
-
-from utils.colors import get_subject_color
-from utils.style import pretty_axes, save_pretty_fig
-
-
 def plot_3axis_segment_by_participant(
     segment_df,
     participant_id,

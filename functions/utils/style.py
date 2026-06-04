@@ -15,7 +15,7 @@ def pretty_axes(ax):
         spine.set_linewidth(1)
 
 
-def save_pretty_fig(fig, filename, plots_dir, dpi=300):
+def save_pretty_fig(fig, filename, plots_dir, dpi=300, show=False):
     plots_dir = Path(plots_dir)
     plots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -26,8 +26,8 @@ def save_pretty_fig(fig, filename, plots_dir, dpi=300):
         bbox_inches="tight",
         facecolor="white",
     )
-
     plt.show()
+
     plt.close(fig)
 
 def get_robust_ylims(y, lower_pct=2.5, upper_pct=97.5, pad_fraction=0.10):

@@ -144,3 +144,95 @@ def plot_accel_segment_by_participant(
 
     filename = f"{make_safe_filename(participant_id)}_{make_safe_filename(fig_suffix)}.png"
     save_pretty_fig(fig, filename, plots_dir)
+
+import matplotlib.pyplot as plt
+
+from utils.colors import get_subject_color
+from utils.style import pretty_axes, save_pretty_fig
+
+
+def plot_3axis_segment_by_participant(
+    segment_df,
+    participant_id,
+    plots_dir,
+    subject_colors,
+    signal_cols,
+    y_label,
+    fig_suffix,
+):
+    """
+    Plot 3-axis signal segment for one participant.
+    """
+
+    color = get_subject_color(participant_id, subject_colors)
+
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=1,
+        figsize=(11, 7),
+        sharex=True,
+        sharey=True,
+    )
+
+    axis_labels = ["X", "Y", "Z"]
+
+    for ax, col, axis_label in zip(axes, signal_cols, axis_labels):
+        ax.plot(
+            segment_df["timestamp"],
+            segment_df[col],
+            color=color,
+            linewidth=1.4,
+        )
+
+        ax.set_title(f"{axis_label} axis", fontweight="bold")
+        pretty_axes(ax)
+
+    fig.supxlabel("Time (s)")
+    fig.supylabel(y_label)
+    fig.suptitle(
+        f"{participant_id} — {y_label} segment",
+        fontweight="bold",
+        y=1.02,
+    )
+
+    save_pretty_fig(
+        fig,
+        f"{participant_id}_{fig_suffix}.png",
+        plots_dir,
+    )
+
+
+def plot_speed_segment_by_participant(
+    segment_df,
+    participant_id,
+    plots_dir,
+    subject_colors,
+    fig_suffix="velocity_segment",
+):
+    plot_3axis_segment_by_participant(
+        segment_df=segment_df,
+        participant_id=participant_id,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        signal_cols=("velocity_x", "velocity_y", "velocity_z"),
+        y_label="Velocity proxy",
+        fig_suffix=fig_suffix,
+    )
+
+
+def plot_position_segment_by_participant(
+    segment_df,
+    participant_id,
+    plots_dir,
+    subject_colors,
+    fig_suffix="position_segment",
+):
+    plot_3axis_segment_by_participant(
+        segment_df=segment_df,
+        participant_id=participant_id,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        signal_cols=("position_x", "position_y", "position_z"),
+        y_label="Position proxy",
+        fig_suffix=fig_suffix,
+    )

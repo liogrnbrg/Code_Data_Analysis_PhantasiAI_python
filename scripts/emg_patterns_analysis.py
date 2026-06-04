@@ -17,12 +17,18 @@ from loading.load_data import load_timing_data, load_emg_accel_data
 from preprocessing.isi_binning import add_isi_bin_column
 from preprocessing.preprocess_emg import preprocess_emg_signal_table
 from preprocessing.signal_segments import select_signal_segment
+
+from plotting.plot_activation_profiles import (
+    plot_activation_profiles_grid_by_participant_and_isi,
+)
+
+from preprocessing.accel_integration import add_velocity_and_position_proxies
+
 from plotting.plot_segments import (
     plot_emg_segment_by_participant,
     plot_accel_segment_by_participant,
-)
-from plotting.plot_activation_profiles import (
-    plot_activation_profiles_grid_by_participant_and_isi,
+    plot_speed_segment_by_participant,
+    plot_position_segment_by_participant,
 )
 
 C = get_config()
@@ -41,7 +47,7 @@ def main():
     C = get_config()
     subject_colors = C["plot"]["subject_colors"]
 
-    fraction_to_plot = 1 / 50
+    fraction_to_plot = 1 / 20
     segment_position = "start"  # "start", "middle", or "end"
 
     print("Loading data...")
@@ -61,6 +67,14 @@ def main():
 
         dfp = dfp.sort_values("timestamp").copy()
         dfp = preprocess_emg_signal_table(dfp, C)
+
+        dfp = add_velocity_and_position_proxies(
+            dfp,
+            accel_cols=("accel_x", "accel_y", "accel_z"),
+            baseline_mode="median",
+            detrend_velocity=True,
+            detrend_position=True,
+        )
 
         processed_tables.append(dfp)
 
@@ -100,6 +114,22 @@ def main():
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
             fig_suffix="acceleration_segment",
+        )
+
+        plot_speed_segment_by_participant(
+            segment_df=segment_p,
+            participant_id=participant_id,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            fig_suffix="velocity_segment",
+        )
+
+        plot_position_segment_by_participant(
+            segment_df=segment_p,
+            participant_id=participant_id,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            fig_suffix="position_segment",
         )
 
     print("Plotting activation profiles...")
@@ -160,6 +190,41 @@ def main():
         subject_colors=subject_colors,
         config=C,
     )
+    for velocity_var, y_label in [
+        ("velocity_x", "Velocity proxy X"),
+        ("velocity_y", "Velocity proxy Y"),
+        ("velocity_z", "Velocity proxy Z"),
+    ]:
+        plot_activation_profiles_grid_by_participant_and_isi(
+            signal_data=emg_data_prep,
+            timing_data=timing_data,
+            participants=participants_profiles,
+            signal_var=velocity_var,
+            y_label=y_label,
+            fig_title=f"Average ± SD {y_label.lower()} profiles from current event to next event",
+            fig_name=f"{velocity_var}_profiles_trial_to_next_trial_grid.png",
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            config=C,
+        )
+    
+    for position_var, y_label in [
+        ("position_x", "Position proxy X"),
+        ("position_y", "Position proxy Y"),
+        ("position_z", "Position proxy Z"),
+    ]:
+        plot_activation_profiles_grid_by_participant_and_isi(
+            signal_data=emg_data_prep,
+            timing_data=timing_data,
+            participants=participants_profiles,
+            signal_var=position_var,
+            y_label=y_label,
+            fig_title=f"Average ± SD {y_label.lower()} profiles from current event to next event",
+            fig_name=f"{position_var}_profiles_trial_to_next_trial_grid.png",
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            config=C,
+        )
 
     print("Done. Plots saved to:", PLOTS_DIR)
 

@@ -17,17 +17,6 @@ __pycache__/
 venv/
 env/
 
-# Outputs / generated files
-outputs/
-Outputs/
-plots/
-Plots/
-*.png
-*.jpg
-*.jpeg
-*.pdf
-*.svg
-
 # Data should not be pushed
 data/
 Data/

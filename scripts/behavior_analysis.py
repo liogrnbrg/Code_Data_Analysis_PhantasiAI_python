@@ -12,9 +12,8 @@ from loading.load_data import load_timing_data, load_emg_accel_data
 from preprocessing.isi_binning import add_isi_bin_column
 from preprocessing.accel_features import (
     add_accel_norm,
-    add_accel_tilt_angles,
-    extract_accel_behavior_metrics,
-    extract_angle_rom_metrics,
+    extract_baseline_corrected_movement_metrics,
+    extract_integrated_accel_displacement_metrics,
 )
 from plotting.plot_behavior_features import (
     plot_behavior_metric_over_trials,
@@ -41,6 +40,7 @@ def main():
 
     subject_colors = C["plot"]["subject_colors"]
 
+    # ---------- Load data ----------
     print("Loading data...")
     timing_data = load_timing_data(DATA_DIR)
     accel_data = load_emg_accel_data(DATA_DIR)
@@ -49,110 +49,213 @@ def main():
 
     print("Preparing acceleration features...")
     accel_data = add_accel_norm(accel_data)
-    accel_data = add_accel_tilt_angles(accel_data)
 
-    print("Extracting acceleration behavioral metrics...")
-    accel_metrics = extract_accel_behavior_metrics(
+    # ---------- Movement metrics ----------
+    print("Extracting baseline-corrected movement metrics...")
+    movement_metrics = extract_baseline_corrected_movement_metrics(
         accel_data=accel_data,
         timing_data=timing_data,
-        signal_var="accel_norm",
         baseline_window_s=(-0.5, 0),
         response_window_s=(0, None),
     )
 
-    print("Extracting angle / ROM proxy metrics...")
-    rom_metrics = extract_angle_rom_metrics(
-        accel_data=accel_data,
-        timing_data=timing_data,
-        angle_vars=("tilt_x_deg", "tilt_y_deg", "tilt_z_deg"),
+    movement_metrics.to_csv(TABLES_DIR / "movement_metrics.csv", index=False)
+    print("Saved:", TABLES_DIR / "movement_metrics.csv")
+
+    # ---------- Double integration displacement proxy ----------
+    print("Extracting exploratory double-integration displacement metrics...")
+
+    all_disp_metrics = []
+
+    for axis in ["accel_x", "accel_y", "accel_z"]:
+        disp_axis = extract_integrated_accel_displacement_metrics(
+            accel_data=accel_data,
+            timing_data=timing_data,
+            accel_axis=axis,
+            baseline_window_s=(-0.5, 0),
+            response_window_s=(0, None),
+            detrend_position=True,
+        )
+
+        if disp_axis.empty:
+            continue
+
+        disp_axis = disp_axis.rename(columns={
+            "disp_range_proxy": f"{axis}_disp_range_proxy",
+            "disp_peak_abs_proxy": f"{axis}_disp_peak_abs_proxy",
+            "disp_final_proxy": f"{axis}_disp_final_proxy",
+            "disp_peak_latency_s": f"{axis}_disp_peak_latency_s",
+        })
+
+        keep_cols = [
+            "participant_id",
+            "trial_num",
+            "isi",
+            "isi_bin",
+            "event",
+            f"{axis}_disp_range_proxy",
+            f"{axis}_disp_peak_abs_proxy",
+            f"{axis}_disp_final_proxy",
+            f"{axis}_disp_peak_latency_s",
+        ]
+
+        all_disp_metrics.append(disp_axis[keep_cols])
+
+    if len(all_disp_metrics) > 0:
+        disp_metrics = all_disp_metrics[0]
+
+        for df in all_disp_metrics[1:]:
+            disp_metrics = disp_metrics.merge(
+                df,
+                on=["participant_id", "trial_num", "isi", "isi_bin", "event"],
+                how="outer",
+            )
+    else:
+        disp_metrics = pd.DataFrame()
+
+    disp_metrics.to_csv(TABLES_DIR / "displacement_proxy_metrics.csv", index=False)
+    print("Saved:", TABLES_DIR / "displacement_proxy_metrics.csv")
+
+    # ---------- EMG metrics ----------
+    print("Preparing EMG timing metrics...")
+
+    emg_metrics = timing_data[
+        ["participant_id", "trial_num", "peak_amp", "peak_time", "event"]
+    ].copy()
+
+    emg_metrics["emg_peak_delay_s"] = (
+        emg_metrics["peak_time"] - emg_metrics["event"]
     )
 
-    behavior_metrics = accel_metrics.merge(
-        rom_metrics,
-        on=["participant_id", "trial_num", "isi", "isi_bin", "event"],
-        how="outer",
-    )
+    # ---------- Merge behavior + EMG ----------
+    print("Merging movement metrics with EMG metrics...")
 
-    behavior_metrics.to_csv(TABLES_DIR / "behavior_metrics.csv", index=False)
-
-    print("Behavior metrics saved to:")
-    print(TABLES_DIR / "behavior_metrics.csv")
-
-    print("Merging with EMG timing metrics...")
-    emg_cols = [
-        "participant_id",
-        "trial_num",
-        "peak_amp",
-        "peak_time",
-        "event",
-    ]
-
-    emg_metrics = timing_data[emg_cols].copy()
-    emg_metrics["emg_peak_delay_s"] = emg_metrics["peak_time"] - emg_metrics["event"]
-
-    merged = behavior_metrics.merge(
+    movement_emg = movement_metrics.merge(
         emg_metrics,
         on=["participant_id", "trial_num", "event"],
         how="left",
     )
 
-    merged.to_csv(TABLES_DIR / "behavior_emg_metrics.csv", index=False)
+    movement_emg.to_csv(TABLES_DIR / "movement_emg_metrics.csv", index=False)
+    print("Saved:", TABLES_DIR / "movement_emg_metrics.csv")
 
-    print("Merged behavior/EMG metrics saved to:")
-    print(TABLES_DIR / "behavior_emg_metrics.csv")
+    if not disp_metrics.empty:
+        disp_emg = disp_metrics.merge(
+            emg_metrics,
+            on=["participant_id", "trial_num", "event"],
+            how="left",
+        )
 
-    # ---------- Behavior plots ----------
-    behavior_plot_metrics = [
-        "accel_peak_relative",
-        "accel_peak_latency_s",
-        "accel_auc_relative",
-        "accel_range",
-        "tilt_x_deg_rom_proxy",
-        "tilt_y_deg_rom_proxy",
-        "tilt_z_deg_rom_proxy",
+        disp_emg.to_csv(TABLES_DIR / "displacement_proxy_emg_metrics.csv", index=False)
+        print("Saved:", TABLES_DIR / "displacement_proxy_emg_metrics.csv")
+    else:
+        disp_emg = pd.DataFrame()
+
+    # ---------- Plot movement metrics ----------
+    movement_plot_metrics = [
+        "movement_peak",
+        "movement_peak_latency_s",
+        "movement_auc",
+        "movement_mean",
+        "movement_sd",
     ]
 
-    for metric in behavior_plot_metrics:
-        if metric not in behavior_metrics.columns:
+    for metric in movement_plot_metrics:
+        if metric not in movement_metrics.columns:
             continue
 
         print(f"Plotting {metric}...")
+
         plot_behavior_metric_over_trials(
-            behavior_data=behavior_metrics,
+            behavior_data=movement_metrics,
             metric=metric,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
         )
 
         plot_behavior_metric_by_isi(
-            behavior_data=behavior_metrics,
+            behavior_data=movement_metrics,
             metric=metric,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
         )
 
-    # ---------- EMG vs behavior plots ----------
-    relation_pairs = [
-        ("peak_amp", "accel_peak_relative"),
-        ("peak_amp", "accel_range"),
-        ("emg_peak_delay_s", "accel_peak_latency_s"),
-        ("peak_amp", "tilt_x_deg_rom_proxy"),
-        ("peak_amp", "tilt_y_deg_rom_proxy"),
-        ("peak_amp", "tilt_z_deg_rom_proxy"),
+    # ---------- Plot displacement proxy metrics ----------
+    disp_plot_metrics = [
+        "accel_x_disp_range_proxy",
+        "accel_y_disp_range_proxy",
+        "accel_z_disp_range_proxy",
+        "accel_x_disp_peak_abs_proxy",
+        "accel_y_disp_peak_abs_proxy",
+        "accel_z_disp_peak_abs_proxy",
     ]
 
-    for emg_metric, behavior_metric in relation_pairs:
-        if emg_metric not in merged.columns or behavior_metric not in merged.columns:
+    for metric in disp_plot_metrics:
+        if metric not in disp_metrics.columns:
+            continue
+
+        print(f"Plotting {metric}...")
+
+        plot_behavior_metric_over_trials(
+            behavior_data=disp_metrics,
+            metric=metric,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+        )
+
+        plot_behavior_metric_by_isi(
+            behavior_data=disp_metrics,
+            metric=metric,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+        )
+
+    # ---------- Plot EMG vs movement ----------
+    movement_relation_pairs = [
+        ("peak_amp", "movement_peak"),
+        ("peak_amp", "movement_auc"),
+        ("peak_amp", "movement_mean"),
+        ("emg_peak_delay_s", "movement_peak_latency_s"),
+    ]
+
+    for emg_metric, behavior_metric in movement_relation_pairs:
+        if emg_metric not in movement_emg.columns or behavior_metric not in movement_emg.columns:
             continue
 
         print(f"Plotting {emg_metric} vs {behavior_metric}...")
+
         plot_emg_vs_behavior_metric(
-            merged_data=merged,
+            merged_data=movement_emg,
             emg_metric=emg_metric,
             behavior_metric=behavior_metric,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
         )
+
+    # ---------- Plot EMG vs displacement proxy ----------
+    if not disp_emg.empty:
+        disp_relation_pairs = [
+            ("peak_amp", "accel_x_disp_range_proxy"),
+            ("peak_amp", "accel_y_disp_range_proxy"),
+            ("peak_amp", "accel_z_disp_range_proxy"),
+            ("emg_peak_delay_s", "accel_x_disp_peak_latency_s"),
+            ("emg_peak_delay_s", "accel_y_disp_peak_latency_s"),
+            ("emg_peak_delay_s", "accel_z_disp_peak_latency_s"),
+        ]
+
+        for emg_metric, behavior_metric in disp_relation_pairs:
+            if emg_metric not in disp_emg.columns or behavior_metric not in disp_emg.columns:
+                continue
+
+            print(f"Plotting {emg_metric} vs {behavior_metric}...")
+
+            plot_emg_vs_behavior_metric(
+                merged_data=disp_emg,
+                emg_metric=emg_metric,
+                behavior_metric=behavior_metric,
+                plots_dir=PLOTS_DIR,
+                subject_colors=subject_colors,
+            )
 
     print("Done.")
 

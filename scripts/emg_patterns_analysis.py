@@ -21,8 +21,7 @@ from preprocessing.signal_segments import select_signal_segment
 from plotting.plot_activation_profiles import (
     plot_activation_profiles_grid_by_participant_and_isi,
 )
-
-from preprocessing.accel_integration import add_velocity_and_position_proxies
+from preprocessing.accel_integration import add_velocity_and_position_proxies, add_trialwise_velocity_position_proxies
 
 from plotting.plot_segments import (
     plot_emg_segment_by_participant,
@@ -68,11 +67,16 @@ def main():
         dfp = dfp.sort_values("timestamp").copy()
         dfp = preprocess_emg_signal_table(dfp, C)
 
-        dfp = add_velocity_and_position_proxies(
-            dfp,
+        timing_p = timing_data[
+            timing_data["participant_id"] == participant_id
+        ].copy()
+
+        dfp = add_trialwise_velocity_position_proxies(
+            data=dfp,
+            timing_data=timing_p,
             accel_cols=("accel_x", "accel_y", "accel_z"),
-            baseline_mode="median",
-            detrend_velocity=True,
+            baseline_window_s=(-0.5, 0),
+            force_zero_velocity_end=True,
             detrend_position=True,
         )
 

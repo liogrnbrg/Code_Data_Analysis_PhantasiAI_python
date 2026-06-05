@@ -98,19 +98,19 @@ def main():
         "accel_y_amp",
         "accel_z_amp",
         "accel_3d_amp",
-        "accel_dominant_amp",
+        "accel_session_dominant_amp",
 
         "velocity_x_amp",
         "velocity_y_amp",
         "velocity_z_amp",
         "velocity_3d_amp",
-        "velocity_dominant_amp",
+        "velocity_session_dominant_amp",
 
         "position_x_amp",
         "position_y_amp",
         "position_z_amp",
         "position_3d_amp",
-        "position_dominant_amp",
+        "position_session_dominant_amp",
     ]
 
     for metric in behavior_plot_metrics:
@@ -141,9 +141,9 @@ def main():
         ("peak_amp", "velocity_3d_amp"),
         ("peak_amp", "position_3d_amp"),
 
-        ("peak_amp", "accel_dominant_amp"),
-        ("peak_amp", "velocity_dominant_amp"),
-        ("peak_amp", "position_dominant_amp"),
+        ("peak_amp", "accel_session_dominant_amp"),
+        ("peak_amp", "velocity_session_dominant_amp"),
+        ("peak_amp", "position_session_dominant_amp"),
 
         ("emg_peak_delay_s", "velocity_3d_amp"),
         ("emg_peak_delay_s", "position_3d_amp"),

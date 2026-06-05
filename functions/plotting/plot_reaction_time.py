@@ -5,30 +5,39 @@ from scipy.stats import linregress
 from utils.colors import get_subject_color
 from utils.style import pretty_axes, save_pretty_fig, get_robust_ylims
 
-
 def plot_reaction_time_one_figure_per_participant(
     rt_data,
     plots_dir,
     subject_colors,
     y_col="reaction_time_norm_delta",
     y_label="Reaction time change from first 10 trials (ms)",
-    block_size=20,
+    block_size=80,
     fig_prefix="reaction_time_by_isi_over_trials",
+    x_col="trial_num",
+    x_label="Global trial number",
+    xlim=(0.5, 400.5),
 ):
     """
-    One figure per participant, one subplot per ISI.
-    X = trial number within ISI.
-    Y = reaction time metric.
+    Plot reaction time over the full session.
+
+    One figure per participant:
+        - one subplot per ISI / stimulation condition
+        - x-axis = global trial number, usually 1 to 400
+        - y-axis = reaction time metric
+        - vertical lines = block boundaries in the global trial sequence
     """
 
     rt_data = rt_data.copy()
 
-    # Safety: create trial_within_isi if missing
-    if "trial_within_isi" not in rt_data.columns:
-        rt_data = rt_data.sort_values(["participant_id", "isi_bin", "trial_num"])
-        rt_data["trial_within_isi"] = (
-            rt_data.groupby(["participant_id", "isi_bin"]).cumcount() + 1
-        )
+    # Safety: make sure the requested x column exists
+    if x_col not in rt_data.columns:
+        if x_col == "trial_within_isi":
+            rt_data = rt_data.sort_values(["participant_id", "isi_bin", "trial_num"])
+            rt_data["trial_within_isi"] = (
+                rt_data.groupby(["participant_id", "isi_bin"]).cumcount() + 1
+            )
+        else:
+            raise KeyError(f"{x_col} not found in rt_data.")
 
     participants = rt_data["participant_id"].dropna().unique()
     isi_values = np.array(sorted(rt_data["isi_bin"].dropna().unique()), dtype=float)
@@ -59,7 +68,7 @@ def plot_reaction_time_one_figure_per_participant(
         fig, axes = plt.subplots(
             nrows=len(isi_values),
             ncols=1,
-            figsize=(10, 2.8 * len(isi_values)),
+            figsize=(11, 2.8 * len(isi_values)),
             sharex=True,
             sharey=True,
         )
@@ -71,7 +80,7 @@ def plot_reaction_time_one_figure_per_participant(
 
             df_isi = df_participant[
                 df_participant["isi_bin"] == isi
-            ].sort_values("trial_within_isi")
+            ].sort_values(x_col)
 
             if df_isi.empty:
                 ax.text(
@@ -90,7 +99,7 @@ def plot_reaction_time_one_figure_per_participant(
             invalid = ~df_isi["reaction_time_valid"]
 
             ax.scatter(
-                df_isi.loc[valid, "trial_within_isi"],
+                df_isi.loc[valid, x_col],
                 df_isi.loc[valid, y_col],
                 color=color,
                 edgecolor="black",
@@ -101,7 +110,7 @@ def plot_reaction_time_one_figure_per_participant(
 
             if invalid.any():
                 ax.scatter(
-                    df_isi.loc[invalid, "trial_within_isi"],
+                    df_isi.loc[invalid, x_col],
                     np.full(invalid.sum(), invalid_y),
                     marker="x",
                     color="red",
@@ -109,7 +118,7 @@ def plot_reaction_time_one_figure_per_participant(
                     alpha=0.9,
                 )
 
-            x = df_isi.loc[valid, "trial_within_isi"].to_numpy(dtype=float)
+            x = df_isi.loc[valid, x_col].to_numpy(dtype=float)
             y = df_isi.loc[valid, y_col].to_numpy(dtype=float)
 
             title_text = f"ISI {isi:.2f} s"
@@ -135,27 +144,29 @@ def plot_reaction_time_one_figure_per_participant(
             if "norm" in y_col:
                 ax.axhline(0, color="black", linestyle="--", linewidth=1)
 
-            if block_size is not None:
-                max_trial = int(np.nanmax(df_isi["trial_within_isi"]))
-                for block_start in range(block_size + 1, max_trial + 1, block_size):
+            # Global block boundaries: 80, 160, 240, 320
+            if block_size is not None and xlim is not None:
+                block_boundaries = np.arange(block_size, xlim[1], block_size)
+
+                for boundary in block_boundaries:
                     ax.axvline(
-                        block_start - 0.5,
+                        boundary + 0.5,
                         color="gray",
                         linestyle=":",
                         linewidth=1,
                         alpha=0.7,
                     )
 
-            ax.set_xlim(0.5, 100.5)
+            ax.set_xlim(*xlim)
             ax.set_ylim(*ylims)
             ax.set_title(title_text, fontweight="bold")
             pretty_axes(ax)
 
-        axes[-1].set_xlabel("Trial number within ISI")
+        axes[-1].set_xlabel(x_label)
         fig.supylabel(y_label)
 
         fig.suptitle(
-            f"{participant_id} — EMG reaction time over trials by ISI",
+            f"{participant_id} — EMG reaction time over global trials by ISI",
             fontweight="bold",
             y=1.01,
         )
@@ -167,7 +178,7 @@ def plot_reaction_time_one_figure_per_participant(
             fig_name,
             plots_dir,
         )
-
+        
 def plot_reaction_time_variability_one_figure_per_participant(
     rt_data,
     plots_dir,
@@ -175,37 +186,44 @@ def plot_reaction_time_variability_one_figure_per_participant(
     rt_col="reaction_time_ms",
     rolling_window=10,
     min_periods=5,
-    block_size=20,
+    block_size=80,
     fig_prefix="reaction_time_variability_by_isi_over_trials",
+    x_col="trial_num",
+    x_label="Global trial number",
+    xlim=(0.5, 400.5),
 ):
     """
-    Plot rolling reaction time variability over trials.
+    Plot rolling reaction time variability over the full session.
 
     One figure per participant:
-        - one subplot per ISI
-        - x-axis = trial number within ISI
+        - one subplot per ISI / stimulation condition
+        - x-axis = global trial number, usually 1 to 400
         - y-axis = rolling SD of reaction time
 
-    Variability is computed as the rolling standard deviation of valid RTs
-    within each participant/ISI.
+    Variability is computed within each participant/ISI using the rolling
+    standard deviation of valid RTs.
     """
 
     rt_data = rt_data.copy()
 
-    if "trial_within_isi" not in rt_data.columns:
-        rt_data = rt_data.sort_values(["participant_id", "isi_bin", "trial_num"])
-        rt_data["trial_within_isi"] = (
-            rt_data.groupby(["participant_id", "isi_bin"]).cumcount() + 1
-        )
+    if x_col not in rt_data.columns:
+        if x_col == "trial_within_isi":
+            rt_data = rt_data.sort_values(["participant_id", "isi_bin", "trial_num"])
+            rt_data["trial_within_isi"] = (
+                rt_data.groupby(["participant_id", "isi_bin"]).cumcount() + 1
+            )
+        else:
+            raise KeyError(f"{x_col} not found in rt_data.")
 
     participants = rt_data["participant_id"].dropna().unique()
     isi_values = np.array(sorted(rt_data["isi_bin"].dropna().unique()), dtype=float)
 
-    # Compute rolling variability
+    # Compute rolling variability within each participant/ISI
     rt_data["reaction_time_rolling_sd"] = np.nan
 
     for _, idx in rt_data.groupby(["participant_id", "isi_bin"]).groups.items():
-        df_group = rt_data.loc[idx].sort_values("trial_within_isi").copy()
+
+        df_group = rt_data.loc[idx].sort_values(x_col).copy()
 
         y = df_group[rt_col].where(df_group["reaction_time_valid"])
 
@@ -239,10 +257,12 @@ def plot_reaction_time_variability_one_figure_per_participant(
         else:
             ylims = (0, 1)
 
+        invalid_y = ylims[0] + 0.05 * (ylims[1] - ylims[0])
+
         fig, axes = plt.subplots(
             nrows=len(isi_values),
             ncols=1,
-            figsize=(10, 2.8 * len(isi_values)),
+            figsize=(11, 2.8 * len(isi_values)),
             sharex=True,
             sharey=True,
         )
@@ -254,7 +274,7 @@ def plot_reaction_time_variability_one_figure_per_participant(
 
             df_isi = df_participant[
                 df_participant["isi_bin"] == isi
-            ].sort_values("trial_within_isi")
+            ].sort_values(x_col)
 
             if df_isi.empty:
                 ax.text(
@@ -272,14 +292,14 @@ def plot_reaction_time_variability_one_figure_per_participant(
             valid = np.isfinite(df_isi["reaction_time_rolling_sd"])
 
             ax.plot(
-                df_isi.loc[valid, "trial_within_isi"],
+                df_isi.loc[valid, x_col],
                 df_isi.loc[valid, "reaction_time_rolling_sd"],
                 color=color,
                 linewidth=2.4,
             )
 
             ax.scatter(
-                df_isi.loc[valid, "trial_within_isi"],
+                df_isi.loc[valid, x_col],
                 df_isi.loc[valid, "reaction_time_rolling_sd"],
                 color=color,
                 edgecolor="black",
@@ -288,13 +308,11 @@ def plot_reaction_time_variability_one_figure_per_participant(
                 alpha=0.65,
             )
 
-            # Mark invalid trials at bottom
             invalid = ~df_isi["reaction_time_valid"]
-            if invalid.any():
-                invalid_y = ylims[0] + 0.05 * (ylims[1] - ylims[0])
 
+            if invalid.any():
                 ax.scatter(
-                    df_isi.loc[invalid, "trial_within_isi"],
+                    df_isi.loc[invalid, x_col],
                     np.full(invalid.sum(), invalid_y),
                     marker="x",
                     color="red",
@@ -302,8 +320,7 @@ def plot_reaction_time_variability_one_figure_per_participant(
                     alpha=0.9,
                 )
 
-            # Optional trend line on rolling SD
-            x = df_isi.loc[valid, "trial_within_isi"].to_numpy(dtype=float)
+            x = df_isi.loc[valid, x_col].to_numpy(dtype=float)
             y = df_isi.loc[valid, "reaction_time_rolling_sd"].to_numpy(dtype=float)
 
             title_text = f"ISI {isi:.2f} s"
@@ -328,29 +345,29 @@ def plot_reaction_time_variability_one_figure_per_participant(
                     f"p = {res.pvalue:.3g}"
                 )
 
-            # Block boundaries
-            if block_size is not None:
-                max_trial = int(np.nanmax(df_isi["trial_within_isi"]))
+            # Global block boundaries: 80, 160, 240, 320
+            if block_size is not None and xlim is not None:
+                block_boundaries = np.arange(block_size, xlim[1], block_size)
 
-                for block_start in range(block_size + 1, max_trial + 1, block_size):
+                for boundary in block_boundaries:
                     ax.axvline(
-                        block_start - 0.5,
+                        boundary + 0.5,
                         color="gray",
                         linestyle=":",
                         linewidth=1,
                         alpha=0.7,
                     )
 
-            ax.set_xlim(0.5, 100.5)
+            ax.set_xlim(*xlim)
             ax.set_ylim(*ylims)
             ax.set_title(title_text, fontweight="bold")
             pretty_axes(ax)
 
-        axes[-1].set_xlabel("Trial number within ISI")
+        axes[-1].set_xlabel(x_label)
         fig.supylabel(f"Rolling RT variability, SD over {rolling_window} trials (ms)")
 
         fig.suptitle(
-            f"{participant_id} — reaction time variability over trials by ISI",
+            f"{participant_id} — reaction time variability over global trials by ISI",
             fontweight="bold",
             y=1.01,
         )

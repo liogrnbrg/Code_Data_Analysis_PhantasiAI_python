@@ -170,8 +170,11 @@ def main():
         subject_colors=subject_colors,
         y_col="reaction_time_norm_delta",
         y_label="Reaction time change from first 10 trials (ms)",
-        block_size=20,
-        fig_prefix="reaction_time_change_by_isi_over_trials",
+        block_size=80,
+        fig_prefix="reaction_time_change_by_isi_over_global_trials",
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
     )
     print("Plotting raw reaction time over trials by ISI...")
     plot_reaction_time_one_figure_per_participant(
@@ -180,8 +183,11 @@ def main():
         subject_colors=subject_colors,
         y_col="reaction_time_ms",
         y_label="Reaction time (ms)",
-        block_size=20,
-        fig_prefix="reaction_time_raw_by_isi_over_trials",
+        block_size=80,
+        fig_prefix="reaction_time_raw_by_isi_over_global_trials",
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
     )
     print("Plotting reaction time variability over trials by ISI...")
     plot_reaction_time_variability_one_figure_per_participant(
@@ -191,8 +197,11 @@ def main():
         rt_col="reaction_time_ms",
         rolling_window=10,
         min_periods=5,
-        block_size=20,
-        fig_prefix="reaction_time_variability_by_isi_over_trials",
+        block_size=80,
+        fig_prefix="reaction_time_variability_by_isi_over_global_trials",
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
     )
 
     print("Done. Plots saved to:")

@@ -176,6 +176,11 @@ def extract_trial_amplitude_metrics(
 
     Trial window:
         current event -> next event
+
+    Dominant-axis metrics:
+        The dominant axis is selected once per participant/session,
+        based on the largest mean amplitude across all trials.
+        This avoids changing the selected axis from trial to trial.
     """
 
     rows = []
@@ -194,6 +199,7 @@ def extract_trial_amplitude_metrics(
             continue
 
         timestamps = signal_p["timestamp"].to_numpy(dtype=float)
+        participant_rows = []
 
         for i in range(len(timing_p) - 1):
 
@@ -251,17 +257,45 @@ def extract_trial_amplitude_metrics(
                         + row[z_col] ** 2
                     )
 
-                    axis_values = {
-                        "x": row[x_col],
-                        "y": row[y_col],
-                        "z": row[z_col],
-                    }
+            participant_rows.append(row)
 
-                    dominant_axis = max(axis_values, key=axis_values.get)
+        if len(participant_rows) == 0:
+            continue
 
-                    row[f"{prefix}_dominant_axis"] = dominant_axis
-                    row[f"{prefix}_dominant_amp"] = axis_values[dominant_axis]
+        participant_df = pd.DataFrame(participant_rows)
 
-            rows.append(row)
+        # Select one dominant axis per participant/session
+        for prefix in ["accel", "velocity", "position"]:
 
-    return pd.DataFrame(rows)
+            axis_amp_cols = {
+                "x": f"{prefix}_x_amp",
+                "y": f"{prefix}_y_amp",
+                "z": f"{prefix}_z_amp",
+            }
+
+            available_cols = {
+                axis: col
+                for axis, col in axis_amp_cols.items()
+                if col in participant_df.columns
+            }
+
+            if len(available_cols) == 0:
+                continue
+
+            mean_amp_by_axis = {
+                axis: participant_df[col].mean(skipna=True)
+                for axis, col in available_cols.items()
+            }
+
+            session_dominant_axis = max(mean_amp_by_axis, key=mean_amp_by_axis.get)
+            session_dominant_col = available_cols[session_dominant_axis]
+
+            participant_df[f"{prefix}_session_dominant_axis"] = session_dominant_axis
+            participant_df[f"{prefix}_session_dominant_amp"] = participant_df[session_dominant_col]
+
+        rows.append(participant_df)
+
+    if len(rows) == 0:
+        return pd.DataFrame()
+
+    return pd.concat(rows, ignore_index=True)

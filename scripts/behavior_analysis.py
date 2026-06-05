@@ -25,6 +25,8 @@ from plotting.animate_trajectories import (
     animate_trial_sequence_2d
 )
 
+from preprocessing.preprocess_accel import preprocess_accel_signal_table
+
 
 def main():
 
@@ -47,15 +49,39 @@ def main():
     print("Loading data...")
     timing_data = load_timing_data(DATA_DIR)
     signal_data = load_emg_accel_data(DATA_DIR)
-
+    
     timing_data = add_isi_bin_column(timing_data, C)
+
+    accel_preprocess_enabled = C.get("accel_preprocess", {}).get("enabled", False)
+
+    if accel_preprocess_enabled:
+        print("Preprocessing acceleration...")
+        signal_data = preprocess_accel_signal_table(signal_data, C)
+
+        accel_cols_for_analysis = (
+            "accel_x_preprocessed",
+            "accel_y_preprocessed",
+            "accel_z_preprocessed",
+        )
+    else:
+        print("Skipping acceleration preprocessing. Using raw acceleration.")
+
+        accel_cols_for_analysis = (
+            "accel_x",
+            "accel_y",
+            "accel_z",
+        )
+
+    print("Acceleration columns used for integration and behavior metrics:")
+    print(accel_cols_for_analysis)
 
     print("Computing trial-wise velocity and position proxies...")
     signal_data = add_trialwise_velocity_position_proxies(
         data=signal_data,
         timing_data=timing_data,
-        accel_cols=("accel_x", "accel_y", "accel_z"),
-        baseline_window_s=(-0.5, 0),
+        accel_cols=accel_cols_for_analysis,
+        axis_names=("x", "y", "z"),
+        baseline_window_s=(-0.5, -0.1),
         force_zero_velocity_end=True,
         detrend_position=True,
     )
@@ -64,11 +90,19 @@ def main():
     behavior_metrics = extract_trial_amplitude_metrics(
         signal_data=signal_data,
         timing_data=timing_data,
-        signal_vars=(
-            "accel_x", "accel_y", "accel_z",
-            "velocity_x", "velocity_y", "velocity_z",
-            "position_x", "position_y", "position_z",
-        ),
+        signal_var_map={
+            "accel_x": accel_cols_for_analysis[0],
+            "accel_y": accel_cols_for_analysis[1],
+            "accel_z": accel_cols_for_analysis[2],
+
+            "velocity_x": "velocity_x",
+            "velocity_y": "velocity_y",
+            "velocity_z": "velocity_z",
+
+            "position_x": "position_x",
+            "position_y": "position_y",
+            "position_z": "position_z",
+        },
     )
 
     behavior_metrics.to_csv(TABLES_DIR / "behavior_amplitude_metrics.csv", index=False)

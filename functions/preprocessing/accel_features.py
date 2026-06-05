@@ -60,28 +60,35 @@ def integrate_accel_one_trial(
 
     return t, velocity, position
 
-
 def add_trialwise_velocity_position_proxies(
     data,
     timing_data,
     accel_cols=("accel_x", "accel_y", "accel_z"),
-    baseline_window_s=(-0.5, 0),
+    axis_names=("x", "y", "z"),
+    baseline_window_s=(-0.5, -0.1),
     force_zero_velocity_end=True,
     detrend_position=True,
 ):
     """
     Add trial-wise velocity and position proxy columns.
 
-    For each trial:
-        event -> next event
-        baseline = mean acceleration before event
-        acceleration is integrated only inside that trial window
+    Inputs can be raw acceleration columns or preprocessed acceleration columns.
+
+    Output columns are always:
+        velocity_x, velocity_y, velocity_z
+        position_x, position_y, position_z
     """
 
     data = data.sort_values("timestamp").copy()
 
+    if len(accel_cols) != len(axis_names):
+        raise ValueError("accel_cols and axis_names must have the same length.")
+
     for accel_col in accel_cols:
-        axis = accel_col.replace("accel_", "")
+        if accel_col not in data.columns:
+            raise KeyError(f"{accel_col} not found in data.")
+
+    for axis in axis_names:
         data[f"velocity_{axis}"] = np.nan
         data[f"position_{axis}"] = np.nan
 
@@ -123,9 +130,8 @@ def add_trialwise_velocity_position_proxies(
             baseline_end = event_start + baseline_window_s[1]
             baseline_mask = (timestamps >= baseline_start) & (timestamps < baseline_end)
 
-            for accel_col in accel_cols:
+            for accel_col, axis in zip(accel_cols, axis_names):
 
-                axis = accel_col.replace("accel_", "")
                 accel_all = data_p[accel_col].to_numpy(dtype=float)
 
                 if baseline_mask.sum() >= 3:
@@ -149,24 +155,13 @@ def add_trialwise_velocity_position_proxies(
                 data.loc[trial_indices, f"velocity_{axis}"] = velocity
                 data.loc[trial_indices, f"position_{axis}"] = position
 
-    data["velocity_norm"] = np.sqrt(
-        data["velocity_x"] ** 2 + data["velocity_y"] ** 2 + data["velocity_z"] ** 2
-    )
-
-    data["position_norm"] = np.sqrt(
-        data["position_x"] ** 2 + data["position_y"] ** 2 + data["position_z"] ** 2
-    )
-
     return data
 
 def extract_trial_amplitude_metrics(
     signal_data,
     timing_data,
-    signal_vars=(
-        "accel_x", "accel_y", "accel_z",
-        "velocity_x", "velocity_y", "velocity_z",
-        "position_x", "position_y", "position_z",
-    ),
+    signal_vars=None,
+    signal_var_map=None,
 ):
     """
     Extract per-trial movement amplitude metrics.
@@ -174,14 +169,31 @@ def extract_trial_amplitude_metrics(
     For each trial:
         amplitude = max(signal) - min(signal)
 
-    Trial window:
-        current event -> next event
+    The signal_var_map allows using different source columns while keeping
+    stable output names.
 
-    Dominant-axis metrics:
-        The dominant axis is selected once per participant/session,
-        based on the largest mean amplitude across all trials.
-        This avoids changing the selected axis from trial to trial.
+    Example:
+        signal_var_map = {
+            "accel_x": "accel_x_preprocessed",
+            "velocity_x": "velocity_x",
+            "position_x": "position_x",
+        }
+
+    This will create:
+        accel_x_amp
+        velocity_x_amp
+        position_x_amp
+    regardless of the source column name.
     """
+
+    if signal_var_map is None:
+        if signal_vars is None:
+            signal_vars = (
+                "accel_x", "accel_y", "accel_z",
+                "velocity_x", "velocity_y", "velocity_z",
+                "position_x", "position_y", "position_z",
+            )
+        signal_var_map = {var: var for var in signal_vars}
 
     rows = []
 
@@ -227,23 +239,24 @@ def extract_trial_amplitude_metrics(
                 "trial_duration_s": event_end - event_start,
             }
 
-            for signal_var in signal_vars:
+            for output_name, source_col in signal_var_map.items():
 
-                if signal_var not in signal_p.columns:
+                if source_col not in signal_p.columns:
+                    row[f"{output_name}_amp"] = np.nan
+                    row[f"{output_name}_abs_peak"] = np.nan
                     continue
 
-                y = signal_p.loc[trial_mask, signal_var].to_numpy(dtype=float)
+                y = signal_p.loc[trial_mask, source_col].to_numpy(dtype=float)
                 y = y[np.isfinite(y)]
 
                 if len(y) < 3:
-                    row[f"{signal_var}_amp"] = np.nan
-                    row[f"{signal_var}_abs_peak"] = np.nan
+                    row[f"{output_name}_amp"] = np.nan
+                    row[f"{output_name}_abs_peak"] = np.nan
                     continue
 
-                row[f"{signal_var}_amp"] = np.nanmax(y) - np.nanmin(y)
-                row[f"{signal_var}_abs_peak"] = np.nanmax(np.abs(y))
+                row[f"{output_name}_amp"] = np.nanmax(y) - np.nanmin(y)
+                row[f"{output_name}_abs_peak"] = np.nanmax(np.abs(y))
 
-            # 3D amplitude across axes
             for prefix in ["accel", "velocity", "position"]:
 
                 x_col = f"{prefix}_x_amp"
@@ -264,7 +277,6 @@ def extract_trial_amplitude_metrics(
 
         participant_df = pd.DataFrame(participant_rows)
 
-        # Select one dominant axis per participant/session
         for prefix in ["accel", "velocity", "position"]:
 
             axis_amp_cols = {

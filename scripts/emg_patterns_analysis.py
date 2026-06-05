@@ -17,11 +17,13 @@ from loading.load_data import load_timing_data, load_emg_accel_data
 from preprocessing.isi_binning import add_isi_bin_column
 from preprocessing.preprocess_emg import preprocess_emg_signal_table
 from preprocessing.signal_segments import select_signal_segment
-
+from plotting.plot_segments import plot_3axis_segment_by_participant
 from plotting.plot_activation_profiles import (
     plot_activation_profiles_grid_by_participant_and_isi,
 )
-from preprocessing.accel_integration import add_velocity_and_position_proxies, add_trialwise_velocity_position_proxies
+# from preprocessing.accel_integration import add_velocity_and_position_proxies, add_trialwise_velocity_position_proxies
+from preprocessing.accel_features import add_trialwise_velocity_position_proxies
+from preprocessing.preprocess_accel import preprocess_accel_signal_table
 
 from plotting.plot_segments import (
     plot_emg_segment_by_participant,
@@ -71,11 +73,27 @@ def main():
             timing_data["participant_id"] == participant_id
         ].copy()
 
+        # ---------- Preprocess acceleration ----------
+        dfp = preprocess_accel_signal_table(dfp, C)
+
+        # ---------- Velocity/position from raw acceleration ----------
         dfp = add_trialwise_velocity_position_proxies(
             data=dfp,
             timing_data=timing_p,
             accel_cols=("accel_x", "accel_y", "accel_z"),
-            baseline_window_s=(-0.5, 0),
+            axis_names=("x_raw", "y_raw", "z_raw"),
+            baseline_window_s=(-0.5, -0.1),
+            force_zero_velocity_end=True,
+            detrend_position=True,
+        )
+
+        # ---------- Velocity/position from preprocessed acceleration ----------
+        dfp = add_trialwise_velocity_position_proxies(
+            data=dfp,
+            timing_data=timing_p,
+            accel_cols=("accel_x_preprocessed", "accel_y_preprocessed", "accel_z_preprocessed"),
+            axis_names=("x_preprocessed", "y_preprocessed", "z_preprocessed"),
+            baseline_window_s=(-0.5, -0.1),
             force_zero_velocity_end=True,
             detrend_position=True,
         )
@@ -112,28 +130,94 @@ def main():
             fig_suffix="processed_EMG_segment",
         )
 
-        plot_accel_segment_by_participant(
+        # plot_accel_segment_by_participant(
+        #     segment_df=segment_p,
+        #     participant_id=participant_id,
+        #     plots_dir=PLOTS_DIR,
+        #     subject_colors=subject_colors,
+        #     fig_suffix="acceleration_segment",
+        # )
+
+        # plot_speed_segment_by_participant(
+        #     segment_df=segment_p,
+        #     participant_id=participant_id,
+        #     plots_dir=PLOTS_DIR,
+        #     subject_colors=subject_colors,
+        #     fig_suffix="velocity_segment",
+        # )
+
+        # plot_position_segment_by_participant(
+        #     segment_df=segment_p,
+        #     participant_id=participant_id,
+        #     plots_dir=PLOTS_DIR,
+        #     subject_colors=subject_colors,
+        #     fig_suffix="position_segment",
+        # )
+
+        #
+        plot_3axis_segment_by_participant(
             segment_df=segment_p,
             participant_id=participant_id,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
-            fig_suffix="acceleration_segment",
+            signal_cols=("accel_x", "accel_y", "accel_z"),
+            y_label="Raw acceleration",
+            fig_suffix="acceleration_raw_segment",
         )
 
-        plot_speed_segment_by_participant(
+        # ---------- Plot all 3-axis signals in the segment ----------
+        plot_3axis_segment_by_participant(
             segment_df=segment_p,
             participant_id=participant_id,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
-            fig_suffix="velocity_segment",
+            signal_cols=("accel_x_preprocessed", "accel_y_preprocessed", "accel_z_preprocessed"),
+            y_label="Preprocessed acceleration",
+            fig_suffix="acceleration_preprocessed_segment",
         )
 
-        plot_position_segment_by_participant(
+        # ---------- Raw-derived velocity ----------
+        plot_3axis_segment_by_participant(
             segment_df=segment_p,
             participant_id=participant_id,
             plots_dir=PLOTS_DIR,
             subject_colors=subject_colors,
-            fig_suffix="position_segment",
+            signal_cols=("velocity_x_raw", "velocity_y_raw", "velocity_z_raw"),
+            y_label="Velocity proxy from raw acceleration",
+            fig_suffix="velocity_raw_segment",
+        )
+
+        # ---------- Preprocessed-derived velocity ----------
+        plot_3axis_segment_by_participant(
+            segment_df=segment_p,
+            participant_id=participant_id,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            signal_cols=("velocity_x_preprocessed", "velocity_y_preprocessed", "velocity_z_preprocessed"),
+            y_label="Velocity proxy from preprocessed acceleration",
+            fig_suffix="velocity_preprocessed_segment",
+        )
+
+        # ---------- Raw-derived position ----------
+        plot_3axis_segment_by_participant(
+            segment_df=segment_p,
+            participant_id=participant_id,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            signal_cols=("position_x_raw", "position_y_raw", "position_z_raw"),
+            y_label="Position proxy from raw acceleration",
+            fig_suffix="position_raw_segment",
+        )
+
+        # ---------- Preprocessed-derived position ----------
+        plot_3axis_segment_by_participant(
+            segment_df=segment_p,
+            participant_id=participant_id,
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            signal_cols=("position_x_preprocessed", "position_y_preprocessed", "position_z_preprocessed"),
+            y_label="Position proxy from preprocessed acceleration",
+            fig_suffix="position_preprocessed_segment",
         )
 
     print("Plotting activation profiles...")
@@ -143,61 +227,34 @@ def main():
         if p in timing_data["participant_id"].unique()
     ]
 
-    plot_activation_profiles_grid_by_participant_and_isi(
-        signal_data=emg_data_prep,
-        timing_data=timing_data,
-        participants=participants_profiles,
-        signal_var=C["emg_patterns"]["preprocess"]["output_var"],
-        y_label=C["emg_patterns"]["plot"]["emg_ylabel"],
-        fig_title="Average ± SD processed EMG profiles from current event to next event",
-        fig_name="processed_emg_profiles_trial_to_next_trial_grid.png",
-        plots_dir=PLOTS_DIR,
-        subject_colors=subject_colors,
-        config=C,
-    )
-
-    plot_activation_profiles_grid_by_participant_and_isi(
-        signal_data=emg_data_prep,
-        timing_data=timing_data,
-        participants=participants_profiles,
-        signal_var="accel_x",
-        y_label="Acceleration X",
-        fig_title="Average ± SD acceleration X profiles from current event to next event",
-        fig_name="accel_x_profiles_trial_to_next_trial_grid.png",
-        plots_dir=PLOTS_DIR,
-        subject_colors=subject_colors,
-        config=C,
-    )
-
-    plot_activation_profiles_grid_by_participant_and_isi(
-        signal_data=emg_data_prep,
-        timing_data=timing_data,
-        participants=participants_profiles,
-        signal_var="accel_y",
-        y_label="Acceleration Y",
-        fig_title="Average ± SD acceleration Y profiles from current event to next event",
-        fig_name="accel_y_profiles_trial_to_next_trial_grid.png",
-        plots_dir=PLOTS_DIR,
-        subject_colors=subject_colors,
-        config=C,
-    )
-
-    plot_activation_profiles_grid_by_participant_and_isi(
-        signal_data=emg_data_prep,
-        timing_data=timing_data,
-        participants=participants_profiles,
-        signal_var="accel_z",
-        y_label="Acceleration Z",
-        fig_title="Average ± SD acceleration Z profiles from current event to next event",
-        fig_name="accel_z_profiles_trial_to_next_trial_grid.png",
-        plots_dir=PLOTS_DIR,
-        subject_colors=subject_colors,
-        config=C,
-    )
+    for accel_var, y_label in [
+        ("accel_x", "Acceleration X raw"),
+        ("accel_y", "Acceleration Y raw"),
+        ("accel_z", "Acceleration Z raw"),
+        ("accel_x_preprocessed", "Acceleration X preprocessed"),
+        ("accel_y_preprocessed", "Acceleration Y preprocessed"),
+        ("accel_z_preprocessed", "Acceleration Z preprocessed"),
+    ]:
+        plot_activation_profiles_grid_by_participant_and_isi(
+            signal_data=emg_data_prep,
+            timing_data=timing_data,
+            participants=participants_profiles,
+            signal_var=accel_var,
+            y_label=y_label,
+            fig_title=f"Average ± SD {y_label.lower()} profiles from current event to next event",
+            fig_name=f"{accel_var}_profiles_trial_to_next_trial_grid.png",
+            plots_dir=PLOTS_DIR,
+            subject_colors=subject_colors,
+            config=C,
+        )
+        
     for velocity_var, y_label in [
-        ("velocity_x", "Velocity proxy X"),
-        ("velocity_y", "Velocity proxy Y"),
-        ("velocity_z", "Velocity proxy Z"),
+        ("velocity_x_raw", "Velocity proxy X raw"),
+        ("velocity_y_raw", "Velocity proxy Y raw"),
+        ("velocity_z_raw", "Velocity proxy Z raw"),
+        ("velocity_x_preprocessed", "Velocity proxy X preprocessed"),
+        ("velocity_y_preprocessed", "Velocity proxy Y preprocessed"),
+        ("velocity_z_preprocessed", "Velocity proxy Z preprocessed"),
     ]:
         plot_activation_profiles_grid_by_participant_and_isi(
             signal_data=emg_data_prep,
@@ -213,9 +270,12 @@ def main():
         )
     
     for position_var, y_label in [
-        ("position_x", "Position proxy X"),
-        ("position_y", "Position proxy Y"),
-        ("position_z", "Position proxy Z"),
+        ("position_x_raw", "Position proxy X raw"),
+        ("position_y_raw", "Position proxy Y raw"),
+        ("position_z_raw", "Position proxy Z raw"),
+        ("position_x_preprocessed", "Position proxy X preprocessed"),
+        ("position_y_preprocessed", "Position proxy Y preprocessed"),
+        ("position_z_preprocessed", "Position proxy Z preprocessed"),
     ]:
         plot_activation_profiles_grid_by_participant_and_isi(
             signal_data=emg_data_prep,

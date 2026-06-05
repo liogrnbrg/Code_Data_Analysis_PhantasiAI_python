@@ -1,0 +1,277 @@
+from pathlib import Path
+import sys
+import pandas as pd
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+FUNCTIONS_DIR = PROJECT_DIR / "functions"
+
+sys.path.append(str(FUNCTIONS_DIR))
+
+from utils.config import get_config
+from loading.load_data import load_timing_data, load_emg_accel_data
+from preprocessing.isi_binning import add_isi_bin_column
+from preprocessing.preprocess_emg import preprocess_emg_signal_table
+from preprocessing.reaction_time import (
+    extract_emg_reaction_times,
+    add_reaction_time_normalization,
+)
+from plotting.plot_reaction_time import (
+    plot_reaction_time_one_figure_per_participant,
+    plot_reaction_time_variability_one_figure_per_participant,
+)
+
+
+def main():
+
+    C = get_config()
+
+    DATA_DIR = Path(C["data"]["path"]).expanduser()
+    DATA_DIR = DATA_DIR if DATA_DIR.exists() else PROJECT_DIR / "data"
+
+    if not DATA_DIR.exists():
+        raise FileNotFoundError(f"DATA_DIR does not exist: {DATA_DIR}")
+
+    PLOTS_DIR = PROJECT_DIR / "outputs" / "plots" / "reaction_time"
+    TABLES_DIR = PROJECT_DIR / "outputs" / "tables"
+
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+
+    subject_colors = C["plot"]["subject_colors"]
+
+    print("Loading data...")
+    timing_data = load_timing_data(DATA_DIR)
+    signal_data = load_emg_accel_data(DATA_DIR)
+
+    timing_data = add_isi_bin_column(timing_data, C)
+
+    # For STIM sessions, the stimulation condition is stored in the "stim" column.
+    # Use it as isi_bin so the reaction-time plots are grouped by stimulation condition.
+    if "stim" in timing_data.columns:
+        stim_available = timing_data["stim"].notna()
+
+        print("Using stim column as isi_bin for rows with available stim values:")
+        print(timing_data.loc[stim_available, "participant_id"].value_counts())
+
+        timing_data.loc[stim_available, "isi_bin"] = timing_data.loc[stim_available, "stim"]
+    
+    print("ISI / ISI_bin counts by participant:")
+    print(
+        timing_data
+        .groupby("participant_id")[["isi", "isi_bin"]]
+        .agg(
+            n_trials=("isi", "size"),
+            n_isi_non_nan=("isi", lambda x: x.notna().sum()),
+            n_isi_bin_non_nan=("isi_bin", lambda x: x.notna().sum()),
+            unique_isi=("isi", lambda x: sorted(x.dropna().unique())[:20]),
+            unique_isi_bin=("isi_bin", lambda x: sorted(x.dropna().unique())[:20]),
+        )
+    )
+    missing_isi_bin = timing_data["isi_bin"].isna() & timing_data["isi"].notna()
+
+    print("Filling missing isi_bin from raw isi:")
+    print(timing_data.loc[missing_isi_bin, "participant_id"].value_counts())
+
+    timing_data.loc[missing_isi_bin, "isi_bin"] = timing_data.loc[missing_isi_bin, "isi"]
+
+    print("Timing rows with NaN isi_bin:")
+    print(
+        timing_data
+        .groupby("participant_id")["isi_bin"]
+        .apply(lambda x: x.isna().sum())
+    )
+    print("Participants in timing_data:")
+    print(timing_data["participant_id"].unique())
+
+    print("Participants in signal_data:")
+    print(signal_data["participant_id"].unique())
+
+    print("Timing counts:")
+    print(timing_data["participant_id"].value_counts())
+
+    print("Signal counts:")
+    print(signal_data["participant_id"].value_counts())
+    print("Preprocessing EMG...")
+    processed_tables = []
+
+    for participant_id, dfp in signal_data.groupby("participant_id", sort=False):
+        print(f"Processing {participant_id}")
+        dfp = dfp.sort_values("timestamp").copy()
+        dfp = preprocess_emg_signal_table(dfp, C)
+        processed_tables.append(dfp)
+
+    signal_data = pd.concat(processed_tables, ignore_index=True)
+
+    print("Extracting EMG reaction times...")
+    rt_data = extract_emg_reaction_times(
+        signal_data=signal_data,
+        timing_data=timing_data,
+        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+        baseline_window_s=(-0.5, -0.1),
+        response_window_s=(0.0, 1.5),
+        threshold_sd=2.0,
+        smooth_window_s=0.05,
+        onset_fraction=0.20,
+        min_peak_prominence_sd=3.0,
+        rectify=True,
+    )
+
+    rt_data = add_reaction_time_normalization(
+        rt_data,
+        value_col="reaction_time_ms",
+        group_cols=("participant_id", "isi_bin"),
+        n_baseline_trials=10,
+    )
+
+    quick_plot_rt_detection(
+        signal_data=signal_data,
+        timing_data=timing_data,
+        rt_data=rt_data,
+        participant_id="Lio_NOSTIM",
+        trial_num=np.random.randint(1, 401), #random number between 1 and 400
+        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+    )
+
+    quick_plot_rt_detection(
+        signal_data=signal_data,
+        timing_data=timing_data,
+        rt_data=rt_data,
+        participant_id="Lio_STIM",
+        trial_num=np.random.randint(1, 401), #random number between 1 and 400
+        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+    )
+
+    quick_plot_rt_detection(
+        signal_data=signal_data,
+        timing_data=timing_data,
+        rt_data=rt_data,
+        participant_id="Parisa_NOSTIM",
+        trial_num=np.random.randint(1, 401), #random number between 1 and 400
+        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+    )
+
+    print(rt_data[["participant_id", "isi_bin", "trial_num", "reaction_time_ms", "reaction_time_valid", "emg_onset_threshold"]].head(20))
+
+    print(rt_data.groupby(["participant_id", "isi_bin"])["reaction_time_valid"].sum())
+    print(rt_data.groupby(["participant_id", "isi_bin"])["reaction_time_ms"].describe())
+
+    rt_data.to_csv(TABLES_DIR / "reaction_time_metrics.csv", index=False)
+
+    print("Saved:")
+    print(TABLES_DIR / "reaction_time_metrics.csv")
+
+    print("Valid reaction times:")
+    print(rt_data.groupby(["participant_id", "isi_bin"])["reaction_time_valid"].sum())
+
+    print("Plotting reaction time over trials by ISI...")
+    plot_reaction_time_one_figure_per_participant(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        y_col="reaction_time_norm_delta",
+        y_label="Reaction time change from first 10 trials (ms)",
+        block_size=20,
+        fig_prefix="reaction_time_change_by_isi_over_trials",
+    )
+    print("Plotting raw reaction time over trials by ISI...")
+    plot_reaction_time_one_figure_per_participant(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        y_col="reaction_time_ms",
+        y_label="Reaction time (ms)",
+        block_size=20,
+        fig_prefix="reaction_time_raw_by_isi_over_trials",
+    )
+    print("Plotting reaction time variability over trials by ISI...")
+    plot_reaction_time_variability_one_figure_per_participant(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        rt_col="reaction_time_ms",
+        rolling_window=10,
+        min_periods=5,
+        block_size=20,
+        fig_prefix="reaction_time_variability_by_isi_over_trials",
+    )
+
+    print("Done. Plots saved to:")
+    print(PLOTS_DIR)
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def quick_plot_rt_detection(
+    signal_data,
+    timing_data,
+    rt_data,
+    participant_id,
+    trial_num,
+    emg_var,
+    baseline_window_s=(-0.5, -0.1),
+    response_window_s=(0.0, 1.5),
+):
+    signal_p = signal_data[
+        signal_data["participant_id"] == participant_id
+    ].sort_values("timestamp")
+
+    timing_p = timing_data[
+        timing_data["participant_id"] == participant_id
+    ].sort_values("trial_num")
+
+    rt_p = rt_data[
+        (rt_data["participant_id"] == participant_id)
+        & (rt_data["trial_num"] == trial_num)
+    ]
+
+    event_time = timing_p.loc[
+        timing_p["trial_num"] == trial_num,
+        "event"
+    ].iloc[0]
+
+    t = signal_p["timestamp"].to_numpy(dtype=float)
+    y = signal_p[emg_var].to_numpy(dtype=float)
+
+    plot_start = event_time + baseline_window_s[0] - 0.2
+    plot_end = event_time + response_window_s[1]
+
+    idx = (t >= plot_start) & (t <= plot_end)
+
+    plt.figure(figsize=(11, 4))
+    plt.plot(t[idx] - event_time, y[idx], linewidth=1.5)
+
+    plt.axvline(0, color="black", linestyle="--", label="Event")
+    plt.axvspan(
+        baseline_window_s[0],
+        baseline_window_s[1],
+        color="gray",
+        alpha=0.25,
+        label="Baseline window",
+    )
+
+    if not rt_p.empty:
+        threshold = rt_p["emg_onset_threshold"].iloc[0]
+        onset_time = rt_p["emg_onset_time"].iloc[0]
+        is_valid = rt_p["reaction_time_valid"].iloc[0]
+
+        plt.axhline(threshold, color="red", linestyle="--", label="Threshold")
+
+        if np.isfinite(onset_time):
+            plt.axvline(
+                onset_time - event_time,
+                color="green",
+                linestyle="--",
+                label=f"Detected onset | valid={is_valid}",
+            )
+
+    plt.xlabel("Time from event (s)")
+    plt.ylabel(emg_var)
+    plt.title(f"{participant_id} | trial {trial_num}")
+    plt.legend()
+    plt.grid(alpha=0.2)
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()

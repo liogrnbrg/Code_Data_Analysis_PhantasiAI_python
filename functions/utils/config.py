@@ -10,9 +10,12 @@ def get_config():
 
     C["plot"] = {
         "subject_colors": {
-            "Lio": np.array([0.00, 0.45, 0.74]),
-            "Parisa": np.array([0.85, 0.33, 0.10]),
-            "Mara": np.array([0.47, 0.67, 0.19]),
+            "Lio_STIM": np.array([0.00, 0.45, 0.74]),
+            "Lio_NOSTIM": np.array([0.00, 0.45, 0.74]) * 0.5,
+            "Parisa_STIM": np.array([0.85, 0.33, 0.10]),
+            "Parisa_NOSTIM": np.array([0.85, 0.33, 0.10]) * 0.5,
+            "Mara_STIM": np.array([0.47, 0.67, 0.19]),
+            "Mara_NOSTIM": np.array([0.47, 0.67, 0.19]) * 0.5,
         },
         "font": {
             "family": "DejaVu Sans", # Options: 'serif', 'sans-serif', 'cursive', 'fantasy', 'monospace', 'normal' ...
@@ -59,6 +62,38 @@ def get_config():
         "line_width": 2.2,
         "emg_ylabel": "Rectified EMG amplitude (µV)",
         "accel_ylabel": "Acceleration",
+    }
+
+    C["accel_preprocess"] = {
+        "enabled": True,
+        "input_cols": ["accel_x", "accel_y", "accel_z"],
+        "output_suffix": "_preprocessed",
+
+        "remove_dc": False,
+        "center_method": "median",
+
+        "lowpass": {
+            "enabled": True,
+            "cutoff_hz": 3.0,
+            "order": 4,
+        },
+
+        "artifact_rejection": {
+            "enabled": False,
+        },
+    }
+
+    C["reaction_time"] = {
+        "emg_var": "emg_processed",
+
+        "baseline_window_s": [-0.5, -0.1],
+        "response_window_s": [0.0, 1.5],
+
+        "threshold_sd": 3.0,
+        "min_duration_s": 0.03,
+
+        "n_baseline_trials_normalization": 10,
+        "block_size": 40,
     }
 
     return C

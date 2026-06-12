@@ -49,6 +49,9 @@ def main():
     print("Loading data...")
     timing_data = load_timing_data(DATA_DIR)
     signal_data = load_emg_accel_data(DATA_DIR)
+
+    print(f"Found participants in timing data: {timing_data['participant_id'].unique()}")
+    print(f"Found participants in signal data: {signal_data['participant_id'].unique()}")
     
     timing_data = add_isi_bin_column(timing_data, C)
 

@@ -28,6 +28,7 @@ def main():
     C = get_config()
 
     DATA_DIR = Path(C["data"]["path"]).expanduser()
+    print(f"Using DATA_DIR: {DATA_DIR}")
     DATA_DIR = DATA_DIR if DATA_DIR.exists() else PROJECT_DIR / "data"
 
     if not DATA_DIR.exists():
@@ -125,32 +126,16 @@ def main():
         n_baseline_trials=10,
     )
 
-    quick_plot_rt_detection(
-        signal_data=signal_data,
-        timing_data=timing_data,
-        rt_data=rt_data,
-        participant_id="Lio_NOSTIM",
-        trial_num=np.random.randint(1, 401), #random number between 1 and 400
-        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
-    )
+    for participant_id in rt_data["participant_id"].unique():
 
-    quick_plot_rt_detection(
-        signal_data=signal_data,
-        timing_data=timing_data,
-        rt_data=rt_data,
-        participant_id="Lio_STIM",
-        trial_num=np.random.randint(1, 401), #random number between 1 and 400
-        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
-    )
-
-    quick_plot_rt_detection(
-        signal_data=signal_data,
-        timing_data=timing_data,
-        rt_data=rt_data,
-        participant_id="Parisa_NOSTIM",
-        trial_num=np.random.randint(1, 401), #random number between 1 and 400
-        emg_var=C["emg_patterns"]["preprocess"]["output_var"],
-    )
+        quick_plot_rt_detection(
+            signal_data=signal_data,
+            timing_data=timing_data,
+            rt_data=rt_data,
+            participant_id=participant_id,
+            trial_num=np.random.randint(1, 401), #random number between 1 and 400
+            emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+        )
 
     print(rt_data[["participant_id", "isi_bin", "trial_num", "reaction_time_ms", "reaction_time_valid", "emg_onset_threshold"]].head(20))
 

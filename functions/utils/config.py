@@ -12,6 +12,7 @@ def get_config():
         "subject_colors": {
             "Lio_STIM": np.array([0.00, 0.45, 0.74]),
             "Lio_NOSTIM": np.array([0.00, 0.45, 0.74]) * 0.5,
+            "Lio_NOSTIM_2": np.array([0.00, 0.45, 0.74]) * 0.75,
             "Parisa_STIM": np.array([0.85, 0.33, 0.10]),
             "Parisa_NOSTIM": np.array([0.85, 0.33, 0.10]) * 0.5,
             "Mara_STIM": np.array([0.47, 0.67, 0.19]),

@@ -280,3 +280,156 @@ def add_reaction_time_normalization(
     )
 
     return rt_data
+
+def prepare_stim_nostim_rt_comparison(
+    rt_data,
+    rt_col="reaction_time_ms",
+    n_baseline_trials=10,
+):
+    """
+    Prepare paired STIM versus NOSTIM reaction-time data.
+
+    For each session and ISI:
+        centered RT = RT - mean of the first n valid RTs
+
+    STIM and NOSTIM are then paired using:
+        base participant + isi_bin + global trial_num
+    """
+
+    df = rt_data.copy()
+
+    required_cols = {
+        "participant_id",
+        "trial_num",
+        "isi_bin",
+        "reaction_time_valid",
+        rt_col,
+    }
+
+    missing_cols = required_cols.difference(df.columns)
+
+    if missing_cols:
+        raise KeyError(
+            f"Missing required columns: {sorted(missing_cols)}"
+        )
+
+    # Extract participant name and experimental condition
+    df["condition"] = np.select(
+        [
+            df["participant_id"].str.endswith("_NOSTIM"),
+            df["participant_id"].str.endswith("_STIM"),
+        ],
+        [
+            "NOSTIM",
+            "STIM",
+        ],
+        default=np.nan,
+    )
+
+    df["base_participant"] = (
+        df["participant_id"]
+        .str.replace("_NOSTIM", "", regex=False)
+        .str.replace("_STIM", "", regex=False)
+    )
+
+    # Keep only STIM/NOSTIM sessions
+    df = df[df["condition"].isin(["STIM", "NOSTIM"])].copy()
+
+    # Invalid RTs should not contribute to baseline or comparison
+    df["rt_valid_value"] = df[rt_col].where(
+        df["reaction_time_valid"]
+        & np.isfinite(df[rt_col])
+    )
+
+    # Compute baseline from the first n valid trials of each session and ISI
+    baseline_rows = (
+        df[df["rt_valid_value"].notna()]
+        .sort_values(
+            [
+                "base_participant",
+                "condition",
+                "isi_bin",
+                "trial_num",
+            ]
+        )
+        .groupby(
+            [
+                "base_participant",
+                "condition",
+                "isi_bin",
+            ],
+            group_keys=False,
+        )
+        .head(n_baseline_trials)
+    )
+
+    baselines = (
+        baseline_rows
+        .groupby(
+            [
+                "base_participant",
+                "condition",
+                "isi_bin",
+            ]
+        )["rt_valid_value"]
+        .mean()
+        .rename("rt_baseline_ms")
+        .reset_index()
+    )
+
+    df = df.merge(
+        baselines,
+        on=[
+            "base_participant",
+            "condition",
+            "isi_bin",
+        ],
+        how="left",
+    )
+
+    df["reaction_time_centered_ms"] = (
+        df["rt_valid_value"] - df["rt_baseline_ms"]
+    )
+
+    # Put STIM and NOSTIM side by side
+    paired = df.pivot_table(
+        index=[
+            "base_participant",
+            "trial_num",
+            "isi_bin",
+        ],
+        columns="condition",
+        values=[
+            rt_col,
+            "reaction_time_centered_ms",
+            "reaction_time_valid",
+        ],
+        aggfunc="first",
+    )
+
+    paired.columns = [
+        f"{variable}_{condition.lower()}"
+        for variable, condition in paired.columns
+    ]
+
+    paired = paired.reset_index()
+
+    # Paired differences
+    paired["rt_difference_raw_ms"] = (
+        paired[f"{rt_col}_stim"]
+        - paired[f"{rt_col}_nostim"]
+    )
+
+    paired["rt_difference_centered_ms"] = (
+        paired["reaction_time_centered_ms_stim"]
+        - paired["reaction_time_centered_ms_nostim"]
+    )
+
+    paired["pair_valid"] = (
+        paired["reaction_time_valid_stim"].fillna(False).astype(bool)
+        & paired["reaction_time_valid_nostim"].fillna(False).astype(bool)
+        & np.isfinite(paired["reaction_time_centered_ms_stim"])
+        & np.isfinite(paired["reaction_time_centered_ms_nostim"])
+    )
+
+    return df, paired

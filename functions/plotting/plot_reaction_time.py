@@ -379,3 +379,75 @@ def plot_reaction_time_variability_one_figure_per_participant(
             fig_name,
             plots_dir,
         )
+
+
+def quick_plot_rt_detection(
+    signal_data,
+    timing_data,
+    rt_data,
+    participant_id,
+    trial_num,
+    emg_var,
+    baseline_window_s=(-0.5, -0.1),
+    response_window_s=(0.0, 1.5),
+):
+    signal_p = signal_data[
+        signal_data["participant_id"] == participant_id
+    ].sort_values("timestamp")
+
+    timing_p = timing_data[
+        timing_data["participant_id"] == participant_id
+    ].sort_values("trial_num")
+
+    rt_p = rt_data[
+        (rt_data["participant_id"] == participant_id)
+        & (rt_data["trial_num"] == trial_num)
+    ]
+
+    event_time = timing_p.loc[
+        timing_p["trial_num"] == trial_num,
+        "event"
+    ].iloc[0]
+
+    t = signal_p["timestamp"].to_numpy(dtype=float)
+    y = signal_p[emg_var].to_numpy(dtype=float)
+
+    plot_start = event_time + baseline_window_s[0] - 0.2
+    plot_end = event_time + response_window_s[1]
+
+    idx = (t >= plot_start) & (t <= plot_end)
+
+    plt.figure(figsize=(11, 4))
+    plt.plot(t[idx] - event_time, y[idx], linewidth=1.5)
+
+    plt.axvline(0, color="black", linestyle="--", label="Event")
+    plt.axvspan(
+        baseline_window_s[0],
+        baseline_window_s[1],
+        color="gray",
+        alpha=0.25,
+        label="Baseline window",
+    )
+
+    if not rt_p.empty:
+        threshold = rt_p["emg_onset_threshold"].iloc[0]
+        onset_time = rt_p["emg_onset_time"].iloc[0]
+        is_valid = rt_p["reaction_time_valid"].iloc[0]
+
+        plt.axhline(threshold, color="red", linestyle="--", label="Threshold")
+
+        if np.isfinite(onset_time):
+            plt.axvline(
+                onset_time - event_time,
+                color="green",
+                linestyle="--",
+                label=f"Detected onset | valid={is_valid}",
+            )
+
+    plt.xlabel("Time from event (s)")
+    plt.ylabel(emg_var)
+    plt.title(f"{participant_id} | trial {trial_num}")
+    plt.legend()
+    plt.grid(alpha=0.2)
+    plt.tight_layout()
+    plt.show()

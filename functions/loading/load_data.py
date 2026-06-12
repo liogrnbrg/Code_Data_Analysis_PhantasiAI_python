@@ -1,6 +1,10 @@
 from pathlib import Path
 import pandas as pd
 
+def load_data(data_dir):
+    signal_data = load_emg_accel_data(data_dir)
+    timing_data = load_timing_data(data_dir)
+    return signal_data, timing_data
 
 def load_timing_data(data_dir):
     data_dir = Path(data_dir)

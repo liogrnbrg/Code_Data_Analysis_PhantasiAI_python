@@ -1,3 +1,5 @@
+# reaction_time_analysis.py
+
 from pathlib import Path
 import sys
 import pandas as pd
@@ -9,6 +11,7 @@ FUNCTIONS_DIR = PROJECT_DIR / "functions"
 sys.path.append(str(FUNCTIONS_DIR))
 
 from utils.config import get_config
+from utils.conditions import add_condition_columns
 from loading.load_data import load_timing_data, load_emg_accel_data
 from preprocessing.isi_binning import add_isi_bin_column
 from preprocessing.preprocess_emg import preprocess_emg_signal_table
@@ -19,6 +22,8 @@ from preprocessing.reaction_time import (
 from plotting.plot_reaction_time import (
     plot_reaction_time_one_figure_per_participant,
     plot_reaction_time_variability_one_figure_per_participant,
+    plot_reaction_time_regressions_combined,
+    plot_reaction_time_variability_regressions_combined,
     quick_plot_rt_detection,
 )
 
@@ -50,13 +55,13 @@ def main():
 
     # For STIM sessions, the stimulation condition is stored in the "stim" column.
     # Use it as isi_bin so the reaction-time plots are grouped by stimulation condition.
-    if "stim" in timing_data.columns:
-        stim_available = timing_data["stim"].notna()
+    # if "stim" in timing_data.columns:
+    #     stim_available = timing_data["stim"].notna()
 
-        print("Using stim column as isi_bin for rows with available stim values:")
-        print(timing_data.loc[stim_available, "participant_id"].value_counts())
+    #     print("Using stim column as isi_bin for rows with available stim values:")
+    #     print(timing_data.loc[stim_available, "participant_id"].value_counts())
 
-        timing_data.loc[stim_available, "isi_bin"] = timing_data.loc[stim_available, "stim"]
+    #     timing_data.loc[stim_available, "isi_bin"] = timing_data.loc[stim_available, "stim"]
     
     print("ISI / ISI_bin counts by participant:")
     print(
@@ -126,16 +131,62 @@ def main():
         n_baseline_trials=10,
     )
 
-    for participant_id in rt_data["participant_id"].unique():
+    rt_data = add_condition_columns(
+        rt_data,
+        config=C,
+        participant_col="participant_id",
+    )
 
-        quick_plot_rt_detection(
-            signal_data=signal_data,
-            timing_data=timing_data,
-            rt_data=rt_data,
-            participant_id=participant_id,
-            trial_num=np.random.randint(1, 401), #random number between 1 and 400
-            emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+    print("\nSessions detected in RT data:")
+    print(
+        rt_data[
+            [
+                "participant_id",
+                "base_participant",
+                "condition",
+                "condition_label",
+                "session_number",
+            ]
+        ]
+        .drop_duplicates()
+        .sort_values(
+            [
+                "base_participant",
+                "condition",
+                "session_number",
+            ]
         )
+        .to_string(index=False)
+    )
+
+    make_quick_detection_plots = True  # Set to True to generate quick detection plots for random trials
+
+    if make_quick_detection_plots:
+        for participant_id in rt_data["participant_id"].dropna().unique():
+
+            available_trials = (
+                rt_data.loc[
+                    rt_data["participant_id"] == participant_id,
+                    "trial_num",
+                ]
+                .dropna()
+                .astype(int)
+                .unique()
+            )
+
+            if len(available_trials) == 0:
+                continue
+
+            trial_num = int(np.random.choice(available_trials))
+
+            quick_plot_rt_detection(
+                signal_data=signal_data,
+                timing_data=timing_data,
+                rt_data=rt_data,
+                participant_id=participant_id,
+                trial_num=trial_num,
+                emg_var=C["emg_patterns"]["preprocess"]["output_var"],
+            )
 
     print(rt_data[["participant_id", "isi_bin", "trial_num", "reaction_time_ms", "reaction_time_valid", "emg_onset_threshold"]].head(20))
 
@@ -189,6 +240,67 @@ def main():
         x_col="trial_num",
         x_label="Global trial number",
         xlim=(0.5, 400.5),
+    )
+
+    print("Plotting combined RT regressions...")
+    plot_reaction_time_regressions_combined(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        y_col="reaction_time_norm_delta",
+        y_label="Reaction time change from first 10 trials (ms)",
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
+        block_size=80,
+        fig_prefix="reaction_time_change_regressions_combined",
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",
+        sd_multiplier=1.0,
+        split_by_isi=False,
+        config=C,
+    )
+
+    print("Plotting combined raw RT regressions...")
+    plot_reaction_time_regressions_combined(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        y_col="reaction_time_ms",
+        y_label="Reaction time (ms)",
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
+        block_size=80,
+        fig_prefix="reaction_time_raw_regressions_combined",
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",
+        sd_multiplier=1.0,
+        split_by_isi=False,
+        config=C,
+    )
+
+    print("Plotting combined RT variability regressions...")
+    plot_reaction_time_variability_regressions_combined(
+        rt_data=rt_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        rt_col="reaction_time_ms",
+        rolling_window=5,
+        min_periods=5,
+        x_col="trial_num",
+        x_label="Global trial number",
+        xlim=(0.5, 400.5),
+        block_size=80,
+        fig_prefix="reaction_time_variability_regressions_combined",
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",
+        sd_multiplier=1.0,
+        split_by_isi=False,
+        config=C,
     )
 
     print("Done. Plots saved to:")

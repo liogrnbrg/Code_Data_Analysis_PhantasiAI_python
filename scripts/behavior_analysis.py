@@ -35,6 +35,24 @@ def main():
     DATA_DIR = Path(C["data"]["path"]).expanduser()
     DATA_DIR = DATA_DIR if DATA_DIR.exists() else PROJECT_DIR / "data"
 
+    print(f"Data directory: {DATA_DIR.resolve()}")
+
+    timing_files = sorted(DATA_DIR.glob("**/timings.csv"))
+    signal_files = sorted(DATA_DIR.glob("**/emg_accel.csv"))
+
+    print("\nTiming files found:")
+    for path in timing_files:
+        print("  ", path.relative_to(DATA_DIR))
+
+    print("\nSignal files found:")
+    for path in signal_files:
+        print("  ", path.relative_to(DATA_DIR))
+
+    print(
+        f"\nFound {len(timing_files)} timing files "
+        f"and {len(signal_files)} signal files."
+    )
+
     if not DATA_DIR.exists():
         raise FileNotFoundError(f"DATA_DIR does not exist: {DATA_DIR}")
 

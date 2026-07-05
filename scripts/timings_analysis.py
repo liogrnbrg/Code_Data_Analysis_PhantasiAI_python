@@ -19,6 +19,8 @@ from plotting.plot_timing_features import (
     plot_current_peak_amplitude_vs_delta_isi_by_participant,
     plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant,
     plot_delta_peak_amplitude_by_delta_isi_sign_by_participant,
+    plot_peak_amplitude_regressions_combined,
+    plot_event_peak_delay_regressions_combined,
 )
 
 C = get_config()
@@ -119,6 +121,42 @@ def main():
             subject_colors=subject_colors,
             normalization=norm,
         )
+
+    # ============================================================
+    # Combined participant regression plots
+    # ============================================================
+
+    plot_event_peak_delay_regressions_combined(
+        timing_data=timing_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",          # default
+        sd_multiplier=1.0,  # ±1 SD
+    )
+
+    plot_peak_amplitude_regressions_combined(
+        timing_data=timing_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        normalization="first",
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",          # default
+        sd_multiplier=1.0,
+    )
+
+    plot_peak_amplitude_regressions_combined(
+        timing_data=timing_data,
+        plots_dir=PLOTS_DIR,
+        subject_colors=subject_colors,
+        normalization="zscore",
+        alpha=0.05,
+        hac_maxlags=10,
+        band="sd",          # default
+        sd_multiplier=1.0,
+    )
 
     print("Done. Plots saved to:", PLOTS_DIR)
 

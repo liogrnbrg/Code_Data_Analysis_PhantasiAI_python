@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
+import statsmodels.api as sm
 
 from preprocessing.normalization import normalize_signal, get_normalization_label
 from utils.colors import get_subject_color
@@ -13,12 +14,416 @@ config = get_config()
 
 def _get_participants(timing_data):
     return timing_data["participant_id"].dropna().unique()
+def _pvalue_to_stars(pvalue):
+    """
+    Convert a p-value to significance stars.
+    """
+    if not np.isfinite(pvalue):
+        return "NA"
+    if pvalue < 0.001:
+        return "***"
+    if pvalue < 0.01:
+        return "**"
+    if pvalue < 0.05:
+        return "*"
+    return "ns"
 
+
+def _format_combined_regression_legend_label(
+    participant_id,
+    slope,
+    pvalue,
+):
+    """
+    Create a compact legend label for combined regression plots.
+    """
+    stars = _pvalue_to_stars(pvalue)
+
+    return (
+        f"{participant_id}   "
+        f"\u03b2={slope:+.4f}   "
+        f"p={pvalue:.3g} {stars}"
+    )
+
+
+def _format_band_description(
+    band,
+    sd_multiplier=1.0,
+    ci_level=0.95,
+):
+    """
+    Human-readable band description for titles / legend titles.
+    """
+    if band is None:
+        return "No band"
+
+    if band == "sd":
+        if sd_multiplier == 1:
+            return "\u00b11 SD band"
+        return f"\u00b1{sd_multiplier:g} SD band"
+
+    if band == "ci":
+        return f"{int(round(ci_level * 100))}% CI band"
+
+    return str(band)
+
+
+def _y_limits_from_regressions(
+    regressions,
+):
+    """
+    Compute y-limits from regression lines and optional bands.
+    """
+    ymins = []
+    ymaxs = []
+
+    for item in regressions:
+        reg = item["regression"]
+
+        y_fit = np.asarray(reg["y_fit"], dtype=float)
+        ymins.append(np.nanmin(y_fit))
+        ymaxs.append(np.nanmax(y_fit))
+
+        band_lower = reg.get("band_lower", None)
+        band_upper = reg.get("band_upper", None)
+
+        if band_lower is not None and band_upper is not None:
+            ymins.append(np.nanmin(band_lower))
+            ymaxs.append(np.nanmax(band_upper))
+
+    ymin = np.nanmin(ymins)
+    ymax = np.nanmax(ymaxs)
+
+    yrange = ymax - ymin
+    if yrange == 0:
+        yrange = 1.0
+
+    pad = 0.08 * yrange
+
+    return ymin - pad, ymax + pad
+
+
+def _plot_combined_regressions(
+    regressions,
+    plots_dir,
+    subject_colors,
+    filename,
+    title,
+    y_label,
+    alpha=0.05,
+    band="sd",
+    sd_multiplier=1.0,
+    ci_level=0.95,
+    show_zero_line=False,
+):
+    """
+    Generic combined regression plot.
+
+    Parameters
+    ----------
+    regressions : list of dict
+        Each item must contain:
+            "participant_id"
+            "regression"
+    """
+
+    if not regressions:
+        print(f"No regressions available for {filename}.")
+        return
+
+    # Sort: significant first, then by participant name
+    for item in regressions:
+        pvalue = item["regression"]["slope_pvalue"]
+        item["is_significant"] = (
+            np.isfinite(pvalue)
+            and pvalue < alpha
+        )
+
+    regressions = sorted(
+        regressions,
+        key=lambda d: (
+            not d["is_significant"],
+            d["participant_id"],
+        ),
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(12.5, 7),
+    )
+
+    # Draw bands first, then lines
+    for item in regressions:
+        participant_id = item["participant_id"]
+        regression = item["regression"]
+        is_significant = item["is_significant"]
+
+        color = get_subject_color(
+            participant_id,
+            subject_colors,
+        )
+
+        band_lower = regression.get("band_lower", None)
+        band_upper = regression.get("band_upper", None)
+
+        if band_lower is not None and band_upper is not None:
+            ax.fill_between(
+                regression["x_fit"],
+                band_lower,
+                band_upper,
+                color=color,
+                alpha=0.12 if is_significant else 0.06,
+                linewidth=0,
+                zorder=1,
+            )
+
+    for item in regressions:
+        participant_id = item["participant_id"]
+        regression = item["regression"]
+        is_significant = item["is_significant"]
+
+        color = get_subject_color(
+            participant_id,
+            subject_colors,
+        )
+
+        pvalue = regression["slope_pvalue"]
+
+        ax.plot(
+            regression["x_fit"],
+            regression["y_fit"],
+            color=color,
+            linewidth=3.2 if is_significant else 2.0,
+            linestyle="-" if is_significant else "--",
+            alpha=0.95 if is_significant else 0.65,
+            zorder=3 if is_significant else 2,
+            label=_format_combined_regression_legend_label(
+                participant_id=participant_id,
+                slope=regression["slope"],
+                pvalue=pvalue,
+            ),
+        )
+
+    # Limits
+    ymin, ymax = _y_limits_from_regressions(regressions)
+    ax.set_ylim(ymin, ymax)
+
+    # Show y=0 only if it is relevant
+    if show_zero_line and ymin <= 0 <= ymax:
+        ax.axhline(
+            0,
+            color="black",
+            linestyle=":",
+            linewidth=1.2,
+            alpha=0.6,
+            zorder=0,
+        )
+
+    ax.set_xlabel("Trial number")
+    ax.set_ylabel(y_label)
+
+    band_description = _format_band_description(
+        band=band,
+        sd_multiplier=sd_multiplier,
+        ci_level=ci_level,
+    )
+
+    ax.set_title(
+        f"{title}\n"
+        f"Solid = p < {alpha:.2f} | Dashed = ns | "
+        f"Shaded = {band_description}"
+    )
+
+    pretty_axes(ax)
+
+    # Put legend outside
+    legend_title = (
+        "Participant-level HAC regressions"
+    )
+
+    ax.legend(
+        title=legend_title,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        frameon=False,
+        fontsize=10,
+        title_fontsize=11,
+        borderaxespad=0.0,
+    )
+
+    fig.subplots_adjust(
+        right=0.72,
+    )
+
+    save_pretty_fig(
+        fig,
+        filename,
+        plots_dir,
+    )
 
 def _get_isi_values(timing_data):
     isi_col = "isi_bin" if "isi_bin" in timing_data.columns else "isi"
     return np.array(sorted(timing_data[isi_col].dropna().unique()), dtype=float), isi_col
 
+def fit_linear_regression(
+    x,
+    y,
+    x_fit=None,
+    band="sd",
+    ci_level=0.95,
+    sd_multiplier=1.0,
+    hac_maxlags=10,
+):
+    """
+    Fit a linear regression and calculate either:
+
+    - an SD band around the fitted line, or
+    - a confidence interval around the estimated mean regression line.
+
+    Parameters
+    ----------
+    x, y
+        Observed values.
+
+    x_fit
+        X values at which predictions are calculated. If None, 200 values
+        spanning the observed x range are used.
+
+    band : {"sd", "ci", None}
+        Type of band to calculate.
+
+        "sd"
+            Fitted line ± residual standard deviation.
+            This is the default.
+
+        "ci"
+            Confidence interval around the estimated mean regression line.
+
+        None
+            Do not calculate a band.
+
+    ci_level
+        Confidence level used when band="ci".
+
+    sd_multiplier
+        Number of residual standard deviations shown when band="sd".
+        For example:
+            1.0 = ±1 SD
+            2.0 = ±2 SD
+
+    hac_maxlags
+        If provided, use HAC robust standard errors with this number of lags.
+        Set to None to use ordinary OLS standard errors.
+
+    Returns
+    -------
+    dict containing:
+        x_fit
+        y_fit
+        band_lower
+        band_upper
+        band_type
+        intercept
+        slope
+        slope_pvalue
+        rvalue
+        r_squared
+        residual_sd
+    """
+
+    if band not in {"sd", "ci", None}:
+        raise ValueError(
+            f"band must be 'sd', 'ci', or None; received {band!r}."
+        )
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    valid = np.isfinite(x) & np.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+
+    if len(x) < 3 or np.nanstd(x) == 0:
+        return None
+
+    if x_fit is None:
+        x_fit = np.linspace(
+            np.nanmin(x),
+            np.nanmax(x),
+            200,
+        )
+    else:
+        x_fit = np.asarray(x_fit, dtype=float)
+
+    X = sm.add_constant(
+        x,
+        has_constant="add",
+    )
+
+    model = sm.OLS(y, X)
+
+    if hac_maxlags is None:
+        result = model.fit()
+    else:
+        result = model.fit(
+            cov_type="HAC",
+            cov_kwds={"maxlags": hac_maxlags},
+        )
+
+    X_fit = sm.add_constant(
+        x_fit,
+        has_constant="add",
+    )
+
+    # Fitted regression line
+    y_fit = np.asarray(
+        result.predict(X_fit),
+        dtype=float,
+    )
+
+    # Residual SD based on the observed values around the fitted line.
+    residuals = y - np.asarray(result.predict(X), dtype=float)
+    residual_sd = np.sqrt(
+        np.sum(residuals**2) / result.df_resid
+    )
+
+    if band == "sd":
+        band_lower = y_fit - sd_multiplier * residual_sd
+        band_upper = y_fit + sd_multiplier * residual_sd
+
+    elif band == "ci":
+        prediction = result.get_prediction(X_fit)
+
+        prediction_frame = prediction.summary_frame(
+            alpha=1 - ci_level,
+        )
+
+        band_lower = prediction_frame[
+            "mean_ci_lower"
+        ].to_numpy()
+
+        band_upper = prediction_frame[
+            "mean_ci_upper"
+        ].to_numpy()
+
+    else:
+        band_lower = None
+        band_upper = None
+
+    correlation = np.corrcoef(x, y)[0, 1]
+
+    return {
+        "x_fit": x_fit,
+        "y_fit": y_fit,
+        "band_lower": band_lower,
+        "band_upper": band_upper,
+        "band_type": band,
+        "intercept": result.params[0],
+        "slope": result.params[1],
+        "slope_pvalue": result.pvalues[1],
+        "rvalue": correlation,
+        "r_squared": result.rsquared,
+        "residual_sd": residual_sd,
+    }
 
 def plot_peak_amplitude_regression_by_participant(
     timing_data,
@@ -70,19 +475,43 @@ def plot_peak_amplitude_regression_by_participant(
         valid = np.isfinite(x) & np.isfinite(y)
 
         if valid.sum() >= 3:
-            res = linregress(x[valid], y[valid])
-            y_fit = res.intercept + res.slope * x
-
-            ax.plot(
-                x,
-                y_fit,
-                color=color,
-                linewidth=2.5,
+            regression = fit_linear_regression(
+                x=x[valid],
+                y=y[valid],
+                x_fit=np.linspace(
+                    np.nanmin(x[valid]),
+                    np.nanmax(x[valid]),
+                    200,
+                ),
+                band="sd",
+                hac_maxlags=10,
             )
 
-            ax.set_title(
-                f"{participant_id} | slope = {res.slope:.4f}, p = {res.pvalue:.3g}"
-            )
+            if regression is not None:
+
+                ax.fill_between(
+                    regression["x_fit"],
+                    regression["band_lower"],
+                    regression["band_upper"],
+                    color=color,
+                    alpha=0.20,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+                ax.plot(
+                    regression["x_fit"],
+                    regression["y_fit"],
+                    color=color,
+                    linewidth=2.5,
+                    zorder=3,
+                )
+
+                ax.set_title(
+                    f"{participant_id} | "
+                    f"slope={regression['slope']:.4f}, "
+                    f"p={regression['slope_pvalue']:.3g}"
+                )
         else:
             ax.set_title(str(participant_id))
 
@@ -233,19 +662,44 @@ def plot_event_peak_delay_regression_by_participant(
         valid = np.isfinite(x) & np.isfinite(y)
 
         if valid.sum() >= 3:
-            res = linregress(x[valid], y[valid])
-            y_fit = res.intercept + res.slope * x
-
-            ax.plot(
-                x,
-                y_fit,
-                color=color,
-                linewidth=2.5,
+            regression = fit_linear_regression(
+                x=x[valid],
+                y=y[valid],
+                x_fit=np.linspace(
+                    np.nanmin(x[valid]),
+                    np.nanmax(x[valid]),
+                    200,
+                ),
+                band="sd",
+                hac_maxlags=10,
             )
 
-            ax.set_title(
-                f"{participant_id} | slope = {res.slope:.4f}, p = {res.pvalue:.3g}"
-            )
+            if regression is not None:
+                ax.fill_between(
+                    regression["x_fit"],
+                    regression["band_lower"],
+                    regression["band_upper"],
+                    color=color,
+                    alpha=0.20,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+                ax.plot(
+                    regression["x_fit"],
+                    regression["y_fit"],
+                    color=color,
+                    linewidth=2.5,
+                    zorder=3,
+                )
+
+                ax.set_title(
+                    f"{participant_id} | "
+                    f"slope = {regression['slope']:.4f}, "
+                    f"p = {regression['slope_pvalue']:.3g}"
+                )
+            else:
+                ax.set_title(str(participant_id))
         else:
             ax.set_title(str(participant_id))
 
@@ -642,6 +1096,7 @@ def plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant(
     timing_data,
     plots_dir,
     subject_colors,
+    band="sd",
 ):
     """
     Scatter + regression.
@@ -747,17 +1202,40 @@ def plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant(
             alpha=0.70,
         )
 
-        res = linregress(x, y)
-
-        x_fit = np.linspace(np.nanmin(x), np.nanmax(x), 100)
-        y_fit = res.intercept + res.slope * x_fit
-
-        ax.plot(
-            x_fit,
-            y_fit,
-            color=color,
-            linewidth=2.5,
+        regression = fit_linear_regression(
+            x=x,
+            y=y,
+            x_fit=np.linspace(
+                np.nanmin(x),
+                np.nanmax(x),
+                200,
+            ),
+            band=band,
+            hac_maxlags=10,
         )
+
+        if regression is not None:
+            if (
+                regression["band_lower"] is not None
+                and regression["band_upper"] is not None
+            ):
+                ax.fill_between(
+                    regression["x_fit"],
+                    regression[f"band_lower"],
+                    regression[f"band_upper"],
+                    color=color,
+                    alpha=0.20,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+                ax.plot(
+                    regression["x_fit"],
+                    regression["y_fit"],
+                    color=color,
+                    linewidth=2.5,
+                    zorder=3,
+                )
 
         ax.axhline(0, color="black", linestyle="--", linewidth=1)
         ax.axvline(0, color="black", linestyle="--", linewidth=1)
@@ -766,8 +1244,9 @@ def plot_delta_peak_amplitude_vs_delta_isi_regression_by_participant(
         ax.set_ylim(*ylims)
 
         ax.set_title(
-            f"{participant_id} | slope = {res.slope:.4f}, "
-            f"r = {res.rvalue:.3f}, p = {res.pvalue:.3g}"
+            f"{participant_id} | slope = {regression['slope']:.4f}, "
+            f"r = {regression['rvalue']:.3f}, "
+            f"p = {regression['slope_pvalue']:.3g}"
         )
 
         pretty_axes(ax)
@@ -791,6 +1270,7 @@ def plot_peak_amplitude_vs_recent_isi_context_by_participant(
     subject_colors,
     n_previous_trials=3,
     normalization="zscore",
+    band="sd",
 ):
     """
     Scatter + regression.
@@ -895,27 +1375,55 @@ def plot_peak_amplitude_vs_recent_isi_context_by_participant(
             alpha=0.70,
         )
 
-        res = linregress(x, y)
-
-        x_fit = np.linspace(np.nanmin(x), np.nanmax(x), 100)
-        y_fit = res.intercept + res.slope * x_fit
-
-        ax.plot(
-            x_fit,
-            y_fit,
-            color=color,
-            linewidth=2.5,
+        regression = fit_linear_regression(
+            x=x,
+            y=y,
+            x_fit=np.linspace(
+                np.nanmin(x),
+                np.nanmax(x),
+                200,
+            ),
+            band=band,
+            hac_maxlags=10,
         )
+
+        if regression is not None:
+            if (
+                regression["band_lower"] is not None
+                and regression["band_upper"] is not None
+            ):
+                ax.fill_between(
+                    regression["x_fit"],
+                    regression[f"band_lower"],
+                    regression[f"band_upper"],
+                    color=color,
+                    alpha=0.20,
+                    linewidth=0,
+                    zorder=1,
+                )
+
+                ax.plot(
+                    regression["x_fit"],
+                    regression["y_fit"],
+                    color=color,
+                    linewidth=2.5,
+                    zorder=3,
+                )
 
         ax.axvline(0, color="black", linestyle="--", linewidth=1)
 
         ax.set_xlim(*xlims)
         ax.set_ylim(*ylims)
 
-        ax.set_title(
-            f"{participant_id} | slope = {res.slope:.4f}, "
-            f"r = {res.rvalue:.3f}, p = {res.pvalue:.3g}"
-        )
+        if regression is not None:
+            ax.set_title(
+                f"{participant_id} | "
+                f"slope = {regression['slope']:.4f}, "
+                f"r = {regression['rvalue']:.3f}, "
+                f"p = {regression['slope_pvalue']:.3g}"
+            )
+        else:
+            ax.set_title(str(participant_id))
 
         pretty_axes(ax)
 
@@ -939,6 +1447,7 @@ def plot_current_peak_amplitude_vs_delta_isi_by_participant(
     plots_dir,
     subject_colors,
     normalization="zscore",
+    band="sd",
 ):
     """
     Scatter + regression.
@@ -1049,27 +1558,49 @@ def plot_current_peak_amplitude_vs_delta_isi_by_participant(
             alpha=0.70,
         )
 
-        res = linregress(x, y)
-
-        x_fit = np.linspace(np.nanmin(x), np.nanmax(x), 100)
-        y_fit = res.intercept + res.slope * x_fit
-
-        ax.plot(
-            x_fit,
-            y_fit,
-            color=color,
-            linewidth=2.5,
+        regression = fit_linear_regression(
+            x=x,
+            y=y,
+            x_fit=np.linspace(
+                np.nanmin(x),
+                np.nanmax(x),
+                200,
+            ),
+            band=band,
+            hac_maxlags=10,
         )
+
+        if regression is not None:
+            ax.fill_between(
+                regression["x_fit"],
+                regression[f"band_lower"],
+                regression[f"band_upper"],
+                color=color,
+                alpha=0.20,
+                linewidth=0,
+                zorder=1,
+            )
+
+            ax.plot(
+                regression["x_fit"],
+                regression["y_fit"],
+                color=color,
+                linewidth=2.5,
+                zorder=3,
+            )
 
         ax.axvline(0, color="black", linestyle="--", linewidth=1)
 
         ax.set_xlim(*xlims)
         ax.set_ylim(*ylims)
 
-        ax.set_title(
-            f"{participant_id} | slope = {res.slope:.4f}, "
-            f"r = {res.rvalue:.3f}, p = {res.pvalue:.3g}"
-        )
+        if regression is not None:
+            ax.set_title(
+                f"{participant_id} | slope = {regression['slope']:.4f}, "
+                f"r = {regression['rvalue']:.3f}, p = {regression['slope_pvalue']:.3g}"
+            )
+        else:
+            ax.set_title(str(participant_id))
 
         pretty_axes(ax)
 
@@ -1084,4 +1615,218 @@ def plot_current_peak_amplitude_vs_delta_isi_by_participant(
         fig,
         f"current_peak_amplitude_vs_delta_isi_{make_safe_filename(normalization)}.png",
         plots_dir,
+    )
+def plot_event_peak_delay_regressions_combined(
+    timing_data,
+    plots_dir,
+    subject_colors,
+    alpha=0.05,
+    hac_maxlags=10,
+    band="sd",
+    sd_multiplier=1.0,
+    ci_level=0.95,
+):
+    """
+    Plot all participant-level event-to-peak-delay regressions
+    on one axis, with optional shaded band.
+
+    Parameters
+    ----------
+    band : {"sd", "ci", None}
+        Band shown around each regression line.
+        Default is "sd".
+
+    sd_multiplier : float
+        Number of SDs used when band="sd".
+
+    ci_level : float
+        Confidence level used when band="ci".
+    """
+
+    participants = _get_participants(timing_data)
+    regressions = []
+
+    for participant_id in participants:
+        dfp = (
+            timing_data[
+                timing_data["participant_id"] == participant_id
+            ]
+            .sort_values("trial_num")
+            .copy()
+        )
+
+        x = np.arange(
+            1,
+            len(dfp) + 1,
+            dtype=float,
+        )
+
+        y = (
+            dfp["peak_time"].to_numpy(dtype=float)
+            - dfp["event"].to_numpy(dtype=float)
+        )
+
+        valid = np.isfinite(x) & np.isfinite(y)
+
+        if valid.sum() < 3:
+            continue
+
+        regression = fit_linear_regression(
+            x=x[valid],
+            y=y[valid],
+            x_fit=np.linspace(
+                np.nanmin(x[valid]),
+                np.nanmax(x[valid]),
+                200,
+            ),
+            band=band,
+            sd_multiplier=sd_multiplier,
+            ci_level=ci_level,
+            hac_maxlags=hac_maxlags,
+        )
+
+        if regression is None:
+            continue
+
+        regressions.append(
+            {
+                "participant_id": participant_id,
+                "regression": regression,
+            }
+        )
+
+    if not regressions:
+        print(
+            "No valid participant regressions available for "
+            "event-to-peak delay."
+        )
+        return
+
+    _plot_combined_regressions(
+        regressions=regressions,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        filename="event_peak_delay_regressions_combined.png",
+        title="Participant regression lines for event-to-peak delay",
+        y_label="Peak time - event time (s)",
+        alpha=alpha,
+        band=band,
+        sd_multiplier=sd_multiplier,
+        ci_level=ci_level,
+        show_zero_line=False,
+    )
+
+def plot_peak_amplitude_regressions_combined(
+    timing_data,
+    plots_dir,
+    subject_colors,
+    normalization="zscore",
+    alpha=0.05,
+    hac_maxlags=10,
+    band="sd",
+    sd_multiplier=1.0,
+    ci_level=0.95,
+):
+    """
+    Plot all participant-level peak-amplitude regressions
+    on one axis, with optional shaded band.
+
+    Parameters
+    ----------
+    normalization : {"raw", "first", "zscore"}
+        Peak-amplitude normalization mode.
+
+    band : {"sd", "ci", None}
+        Band shown around each regression line.
+        Default is "sd".
+
+    sd_multiplier : float
+        Number of SDs used when band="sd".
+
+    ci_level : float
+        Confidence level used when band="ci".
+    """
+
+    participants = _get_participants(timing_data)
+
+    title_suffix, y_label = get_normalization_label(
+        normalization
+    )
+
+    regressions = []
+
+    for participant_id in participants:
+        dfp = (
+            timing_data[
+                timing_data["participant_id"] == participant_id
+            ]
+            .sort_values("trial_num")
+            .copy()
+        )
+
+        x = np.arange(
+            1,
+            len(dfp) + 1,
+            dtype=float,
+        )
+
+        y = normalize_signal(
+            dfp["peak_amp"].to_numpy(dtype=float),
+            normalization,
+        )
+
+        valid = np.isfinite(x) & np.isfinite(y)
+
+        if valid.sum() < 3:
+            continue
+
+        regression = fit_linear_regression(
+            x=x[valid],
+            y=y[valid],
+            x_fit=np.linspace(
+                np.nanmin(x[valid]),
+                np.nanmax(x[valid]),
+                200,
+            ),
+            band=band,
+            sd_multiplier=sd_multiplier,
+            ci_level=ci_level,
+            hac_maxlags=hac_maxlags,
+        )
+
+        if regression is None:
+            continue
+
+        regressions.append(
+            {
+                "participant_id": participant_id,
+                "regression": regression,
+            }
+        )
+
+    if not regressions:
+        print(
+            "No valid participant regressions available for "
+            f"peak amplitude, normalization={normalization!r}."
+        )
+        return
+
+    _plot_combined_regressions(
+        regressions=regressions,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        filename=(
+            "peak_amplitude_regressions_combined_"
+            f"{make_safe_filename(normalization)}.png"
+        ),
+        title=(
+            "Participant regression lines for peak amplitude — "
+            f"{title_suffix}"
+        ),
+        y_label=y_label,
+        alpha=alpha,
+        band=band,
+        sd_multiplier=sd_multiplier,
+        ci_level=ci_level,
+        show_zero_line=False,
     )

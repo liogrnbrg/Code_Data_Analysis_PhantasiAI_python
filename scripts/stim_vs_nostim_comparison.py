@@ -1,3 +1,5 @@
+# stim_vs_nostim_comparison.py
+
 from pathlib import Path
 import sys
 
@@ -126,7 +128,55 @@ def main():
         rt_data=rt_data,
         rt_col="reaction_time_ms",
         n_baseline_trials=10,
+        config=C,
     )
+
+    print("\nSessions detected:")
+    print(
+        long_data[
+            [
+                "participant_id",
+                "base_participant",
+                "condition",
+                "condition_label",
+                "session_number",
+            ]
+        ]
+        .drop_duplicates()
+        .sort_values(
+            [
+                "base_participant",
+                "condition",
+                "session_number",
+            ]
+        )
+        .to_string(index=False)
+    )
+
+    print("\nComparisons created:")
+    if paired_data.empty:
+        print("No paired comparisons available.")
+    else:
+        print(
+            paired_data[
+                [
+                    "comparison_label",
+                    "base_participant",
+                    "test_session_id",
+                    "reference_session_id",
+                    "isi_bin",
+                ]
+            ]
+            .drop_duplicates()
+            .sort_values(
+                [
+                    "base_participant",
+                    "comparison_label",
+                    "isi_bin",
+                ]
+            )
+            .to_string(index=False)
+        )
 
     long_data = add_rolling_rt_variability(
         long_data=long_data,
@@ -137,6 +187,7 @@ def main():
 
     variability_pairs = prepare_variability_pairs(
         long_data=long_data,
+        config=C,
     )
 
     long_data.to_csv(
@@ -165,6 +216,7 @@ def main():
             long_data=long_data,
             variability_col="reaction_time_rolling_sd_ms",
             hac_maxlags=10,
+            config=C,
         )
     )
 
@@ -173,28 +225,29 @@ def main():
         index=False,
     )
 
-    print("\nSTIM versus NOSTIM variability trend comparison:")
+    print("\nCondition variability trend comparison:")
     print(
         variability_trend_stats[
             [
+                "comparison_label",
                 "base_participant",
                 "isi_bin",
-                "n_stim",
-                "n_nostim",
-                "stim_slope_sd_ms_per_trial",
-                "nostim_slope_sd_ms_per_trial",
+                "n_test",
+                "n_reference",
+                "test_slope_sd_ms_per_trial",
+                "reference_slope_sd_ms_per_trial",
                 "interaction_slope_difference_sd_ms_per_trial",
                 "interaction_pvalue",
             ]
         ].to_string(index=False)
     )
-
     print("Comparing STIM and NOSTIM temporal trends...")
 
     trend_stats = compute_stim_nostim_trend_statistics(
         long_data=long_data,
         y_col="reaction_time_centered_ms",
         hac_maxlags=10,
+        config=C,
     )
 
     trend_stats.to_csv(
@@ -202,16 +255,17 @@ def main():
         index=False,
     )
 
-    print("\nSTIM versus NOSTIM trend comparison:")
+    print("\nCondition trend comparison:")
     print(
         trend_stats[
             [
+                "comparison_label",
                 "base_participant",
                 "isi_bin",
-                "n_stim",
-                "n_nostim",
-                "stim_slope_ms_per_trial",
-                "nostim_slope_ms_per_trial",
+                "n_test",
+                "n_reference",
+                "test_slope_ms_per_trial",
+                "reference_slope_ms_per_trial",
                 "interaction_slope_difference_ms_per_trial",
                 "interaction_pvalue",
             ]
@@ -250,14 +304,15 @@ def main():
         index=False,
     )
 
-    print("\nPaired RT statistics by ISI:")
+    print("\nPaired RT statistics by comparison and ISI:")
     print(
         overall_stats[
             [
+                "comparison_label",
                 "base_participant",
                 "isi_bin",
                 "n_valid_pairs",
-                "mean_difference_stim_minus_nostim_ms",
+                "mean_difference_test_minus_reference_ms",
                 "cohens_dz",
                 "paired_t_pvalue",
                 "wilcoxon_pvalue",
@@ -282,6 +337,21 @@ def main():
         block_size=80,
         xlim=(0.5, 400.5),
         fig_prefix="stim_vs_nostim_centered_rt",
+        config=C,
+    )
+
+    plot_stim_nostim_rt_overlay(
+        long_data=long_data,
+        trend_stats=trend_stats,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        y_col="reaction_time_centered_ms",
+        y_label="RT change from first 10 trials (ms)",
+        block_size=80,
+        xlim=(0.5, 400.5),
+        fig_prefix="stim_vs_nostim_centered_rt_no_points",
+        show_individual_points=False,
+        config=C,
     )
 
     print("Plotting paired STIM minus NOSTIM differences...")
@@ -289,11 +359,12 @@ def main():
     plot_stim_minus_nostim_rt_difference(
         paired_data=paired_data,
         plots_dir=plots_dir,
-        difference_col="rt_difference_centered_ms",
-        y_label="STIM − NOSTIM centered RT (ms)",
+        value_col="rt_difference_centered_ms",
+        y_label="Test − reference centered RT (ms)",
         block_size=80,
         xlim=(0.5, 400.5),
-        fig_prefix="stim_minus_nostim_centered_rt",
+        fig_prefix="condition_difference_centered_rt",
+        config=C,
     )
 
     print("Plotting RT variability comparison...")
@@ -307,6 +378,20 @@ def main():
         block_size=80,
         xlim=(0.5, 400.5),
         fig_prefix="stim_vs_nostim_rt_variability",
+        config=C,
+    )
+
+    plot_stim_nostim_rt_variability(
+        long_data=long_data,
+        variability_trend_stats=variability_trend_stats,
+        plots_dir=plots_dir,
+        subject_colors=subject_colors,
+        variability_col="reaction_time_rolling_sd_ms",
+        block_size=80,         
+        xlim=(0.5, 400.5),
+        fig_prefix="stim_vs_nostim_rt_variability_no_points",
+        show_individual_points=False,
+        config=C,
     )
 
     print("\nDone.")

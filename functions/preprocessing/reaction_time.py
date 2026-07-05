@@ -1,12 +1,15 @@
+# reaction_time.py
+
 import numpy as np
 import pandas as pd
+from utils.conditions import add_condition_columns
 
 
 def smooth_moving_average(y, fs, window_s=0.05):
     """
     Smooth signal with a moving average window.
 
-    Example:
+    Example:x
         window_s = 0.05 means 50 ms smoothing.
     """
 
@@ -161,17 +164,44 @@ def extract_emg_reaction_times(
 
     rows = []
 
+    
     for participant_id in timing_data["participant_id"].dropna().unique():
 
-        signal_p = signal_data[
-            signal_data["participant_id"] == participant_id
-        ].sort_values("timestamp").reset_index(drop=True)
+        print(f"\nExtracting RT: {participant_id}")
 
-        timing_p = timing_data[
-            timing_data["participant_id"] == participant_id
-        ].sort_values("event").reset_index(drop=True)
+        signal_p = (
+            signal_data[
+                signal_data["participant_id"] == participant_id
+            ]
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+
+        timing_p = (
+            timing_data[
+                timing_data["participant_id"] == participant_id
+            ]
+            .sort_values("event")
+            .reset_index(drop=True)
+        )
+
+        print(f"  signal rows: {len(signal_p)}")
+        print(f"  timing rows: {len(timing_p)}")
+
+        if "event" in timing_p.columns:
+            print(
+                f"  finite events: "
+                f"{np.isfinite(pd.to_numeric(timing_p['event'], errors='coerce')).sum()}"
+            )
+
+        if "isi_bin" in timing_p.columns:
+            print(
+                f"  non-NaN isi_bin: "
+                f"{timing_p['isi_bin'].notna().sum()}"
+            )
 
         if len(signal_p) == 0 or len(timing_p) == 0:
+            print("  skipped: missing signal or timing data")
             continue
 
         timestamps = signal_p["timestamp"].to_numpy(dtype=float)
@@ -181,40 +211,67 @@ def extract_emg_reaction_times(
 
         emg = signal_p[emg_var].to_numpy(dtype=float)
 
+        n_rows_before = len(rows)
+
         for i in range(len(timing_p)):
 
-            event_time = timing_p.loc[i, "event"]
+            event_time = pd.to_numeric(
+                timing_p.loc[i, "event"],
+                errors="coerce",
+            )
 
             if not np.isfinite(event_time):
                 continue
 
-            onset_time, reaction_time_s, threshold, is_valid = detect_emg_onset_threshold(
-                timestamps=timestamps,
-                emg=emg,
-                event_time=event_time,
-                baseline_window_s=baseline_window_s,
-                response_window_s=response_window_s,
-                threshold_sd=threshold_sd,
-                smooth_window_s=smooth_window_s,
-                onset_fraction=onset_fraction,
-                min_peak_prominence_sd=min_peak_prominence_sd,
-                rectify=rectify,
+            onset_time, reaction_time_s, threshold, is_valid = (
+                detect_emg_onset_threshold(
+                    timestamps=timestamps,
+                    emg=emg,
+                    event_time=event_time,
+                    baseline_window_s=baseline_window_s,
+                    response_window_s=response_window_s,
+                    threshold_sd=threshold_sd,
+                    smooth_window_s=smooth_window_s,
+                    onset_fraction=onset_fraction,
+                    min_peak_prominence_sd=min_peak_prominence_sd,
+                    rectify=rectify,
+                )
             )
 
             row = {
                 "participant_id": participant_id,
-                "trial_num": timing_p.loc[i, "trial_num"] if "trial_num" in timing_p.columns else i + 1,
-                "isi": timing_p.loc[i, "isi"] if "isi" in timing_p.columns else np.nan,
-                "isi_bin": timing_p.loc[i, "isi_bin"] if "isi_bin" in timing_p.columns else np.nan,
+                "trial_num": (
+                    timing_p.loc[i, "trial_num"]
+                    if "trial_num" in timing_p.columns
+                    else i + 1
+                ),
+                "isi": (
+                    timing_p.loc[i, "isi"]
+                    if "isi" in timing_p.columns
+                    else np.nan
+                ),
+                "isi_bin": (
+                    timing_p.loc[i, "isi_bin"]
+                    if "isi_bin" in timing_p.columns
+                    else np.nan
+                ),
                 "event": event_time,
                 "emg_onset_time": onset_time,
                 "reaction_time_s": reaction_time_s,
-                "reaction_time_ms": reaction_time_s * 1000 if np.isfinite(reaction_time_s) else np.nan,
+                "reaction_time_ms": (
+                    reaction_time_s * 1000
+                    if np.isfinite(reaction_time_s)
+                    else np.nan
+                ),
                 "emg_onset_threshold": threshold,
-                "reaction_time_valid": is_valid,
+                "reaction_time_valid": bool(is_valid),
             }
 
             rows.append(row)
+
+    n_added = len(rows) - n_rows_before
+
+    print(f"  RT rows added: {n_added}")
 
     rt_data = pd.DataFrame(rows)
 
@@ -222,7 +279,19 @@ def extract_emg_reaction_times(
         return rt_data
 
     # Trial index within each ISI, so each ISI has x = 1..100
-    rt_data = rt_data.sort_values(["participant_id", "isi_bin", "trial_num"]).reset_index(drop=True)
+    rt_data = (
+        rt_data
+        .sort_values(["participant_id", "isi_bin", "trial_num"])
+        .reset_index(drop=True)
+    )
+
+    # Add parsed condition metadata:
+    # X_NOSTIM, X_FIXED_STIM, X_STIM, X_STIM_2, etc.
+    rt_data = add_condition_columns(
+        rt_data,
+        config=None,
+        participant_col="participant_id",
+    )
 
     rt_data["trial_within_isi"] = (
         rt_data
@@ -287,149 +356,20 @@ def prepare_stim_nostim_rt_comparison(
     n_baseline_trials=10,
 ):
     """
-    Prepare paired STIM versus NOSTIM reaction-time data.
+    Backward-compatible wrapper.
 
-    For each session and ISI:
-        centered RT = RT - mean of the first n valid RTs
+    The real condition-comparison logic now lives in:
+        analysis.stim_nostim_comparison.prepare_rt_stim_nostim_comparison
 
-    STIM and NOSTIM are then paired using:
-        base participant + isi_bin + global trial_num
+    This wrapper exists only to avoid old imports breaking.
     """
-
-    df = rt_data.copy()
-
-    required_cols = {
-        "participant_id",
-        "trial_num",
-        "isi_bin",
-        "reaction_time_valid",
-        rt_col,
-    }
-
-    missing_cols = required_cols.difference(df.columns)
-
-    if missing_cols:
-        raise KeyError(
-            f"Missing required columns: {sorted(missing_cols)}"
-        )
-
-    # Extract participant name and experimental condition
-    df["condition"] = np.select(
-        [
-            df["participant_id"].str.endswith("_NOSTIM"),
-            df["participant_id"].str.endswith("_STIM"),
-        ],
-        [
-            "NOSTIM",
-            "STIM",
-        ],
-        default=np.nan,
+    from analysis.stim_nostim_comparison import (
+        prepare_rt_stim_nostim_comparison,
     )
 
-    df["base_participant"] = (
-        df["participant_id"]
-        .str.replace("_NOSTIM", "", regex=False)
-        .str.replace("_STIM", "", regex=False)
+    return prepare_rt_stim_nostim_comparison(
+        rt_data=rt_data,
+        rt_col=rt_col,
+        n_baseline_trials=n_baseline_trials,
+        config=None,
     )
-
-    # Keep only STIM/NOSTIM sessions
-    df = df[df["condition"].isin(["STIM", "NOSTIM"])].copy()
-
-    # Invalid RTs should not contribute to baseline or comparison
-    df["rt_valid_value"] = df[rt_col].where(
-        df["reaction_time_valid"]
-        & np.isfinite(df[rt_col])
-    )
-
-    # Compute baseline from the first n valid trials of each session and ISI
-    baseline_rows = (
-        df[df["rt_valid_value"].notna()]
-        .sort_values(
-            [
-                "base_participant",
-                "condition",
-                "isi_bin",
-                "trial_num",
-            ]
-        )
-        .groupby(
-            [
-                "base_participant",
-                "condition",
-                "isi_bin",
-            ],
-            group_keys=False,
-        )
-        .head(n_baseline_trials)
-    )
-
-    baselines = (
-        baseline_rows
-        .groupby(
-            [
-                "base_participant",
-                "condition",
-                "isi_bin",
-            ]
-        )["rt_valid_value"]
-        .mean()
-        .rename("rt_baseline_ms")
-        .reset_index()
-    )
-
-    df = df.merge(
-        baselines,
-        on=[
-            "base_participant",
-            "condition",
-            "isi_bin",
-        ],
-        how="left",
-    )
-
-    df["reaction_time_centered_ms"] = (
-        df["rt_valid_value"] - df["rt_baseline_ms"]
-    )
-
-    # Put STIM and NOSTIM side by side
-    paired = df.pivot_table(
-        index=[
-            "base_participant",
-            "trial_num",
-            "isi_bin",
-        ],
-        columns="condition",
-        values=[
-            rt_col,
-            "reaction_time_centered_ms",
-            "reaction_time_valid",
-        ],
-        aggfunc="first",
-    )
-
-    paired.columns = [
-        f"{variable}_{condition.lower()}"
-        for variable, condition in paired.columns
-    ]
-
-    paired = paired.reset_index()
-
-    # Paired differences
-    paired["rt_difference_raw_ms"] = (
-        paired[f"{rt_col}_stim"]
-        - paired[f"{rt_col}_nostim"]
-    )
-
-    paired["rt_difference_centered_ms"] = (
-        paired["reaction_time_centered_ms_stim"]
-        - paired["reaction_time_centered_ms_nostim"]
-    )
-
-    paired["pair_valid"] = (
-        paired["reaction_time_valid_stim"].fillna(False).astype(bool)
-        & paired["reaction_time_valid_nostim"].fillna(False).astype(bool)
-        & np.isfinite(paired["reaction_time_centered_ms_stim"])
-        & np.isfinite(paired["reaction_time_centered_ms_nostim"])
-    )
-
-    return df, paired
